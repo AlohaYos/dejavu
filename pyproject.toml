@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dejavu"
+dynamic = ["version"]
+description = "Local knowledge base CLI that gives Claude Code memory across sessions"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Yos" }]
+keywords = ["claude-code", "knowledge-base", "cli", "sqlite", "fts5"]
+classifiers = [
+  "Environment :: Console",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+
+# Zero dependencies. This is a hard constraint: it keeps the Homebrew formula free of
+# resource blocks and makes installation near-instant.
+dependencies = []
+
+[project.scripts]
+dejavu = "dejavu.cli:main"
+# Short alias. Claude types this on almost every turn, so keep a terse form available.
+deja = "dejavu.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[tool.hatch.version]
+path = "src/dejavu/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dejavu"]
+artifacts = ["src/dejavu/assets/**"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

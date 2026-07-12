@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+        python-version: ["3.11", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Show SQLite version
+        run: |
+          uv run --python ${{ matrix.python-version }} python -c \
+            "import sqlite3; print('sqlite', sqlite3.sqlite_version)"
+
+      - name: Lint
+        run: uv run --python ${{ matrix.python-version }} --with ruff ruff check .
+
+      - name: Test
+        run: uv run --python ${{ matrix.python-version }} --with pytest pytest -v
+
+      - name: Smoke-test the installed CLI
+        run: |
+          uv tool install .
+          dejavu --version
+          mkdir -p /tmp/smoke && cd /tmp/smoke && git init -q
+          dejavu init
+          dejavu add "検索実装のメモ" --body "3段階検索を行う" --keywords "fts5,search"
+          # A two-character Japanese query. The trigram tokenizer cannot match it, so this
+          # fails unless the LIKE fallback is working.
+          dejavu search "検索" | grep -q "検索実装" || {
+            echo "Japanese search is broken"; exit 1;
+          }

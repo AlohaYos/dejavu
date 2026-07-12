@@ -1,0 +1,13 @@
+# dejavu config
+#
+# Days before an entry is reported as stale, measured from when it was last *verified*
+# (checked_at), not when it was last edited.
+# Stale entries are never hidden from search results; they come back marked with ⚠.
+
+[stale_days]
+context = 7
+plan = 14
+decision = 30
+feature = 7
+convention = 30
+note = 14
