@@ -5,15 +5,6 @@ dejavu gives Claude Code a long-term memory — one that survives across session
 **You will hardly ever type a dejavu command.** After a one-time setup, Claude does the
 remembering and the recalling itself. You just talk to it the way you always have.
 
-*[日本語版 / Japanese version](README.ja.md)*
-
-| Document | For |
-| --- | --- |
-| This page | Using dejavu |
-| [DEVELOPING.md](docs/DEVELOPING.md) | Changing dejavu: the dev loop, tuning, the MCP server |
-| [RELEASING.md](docs/RELEASING.md) | Cutting a release and updating the Homebrew tap |
-| [BACKLOG.md](docs/BACKLOG.md) | Work deliberately deferred, with enough context to pick it up cold |
-
 ---
 
 ## Table of contents
