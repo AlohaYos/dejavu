@@ -5,12 +5,21 @@ dejavu gives Claude Code a long-term memory — one that survives across session
 **You will hardly ever type a dejavu command.** After a one-time setup, Claude does the
 remembering and the recalling itself. You just talk to it the way you always have.
 
+*[日本語版 / Japanese version](README.ja.md)*
+
+| Document | For |
+| --- | --- |
+| This page | Using dejavu |
+| [DEVELOPING.md](docs/DEVELOPING.md) | Changing dejavu: the dev loop, tuning, the MCP server |
+| [RELEASING.md](docs/RELEASING.md) | Cutting a release and updating the Homebrew tap |
+| [BACKLOG.md](docs/BACKLOG.md) | Work deliberately deferred, with enough context to pick it up cold |
+
 ---
 
 ## Table of contents
 
 1. [What problem this solves](#what-problem-this-solves)
-2. [Install (once)](#install-once)
+2. [Install (once, from the command line)](#install-once-from-the-command-line)
 3. [Add it to a project](#add-it-to-a-project)
 4. [Scopes: what Claude remembers, and where](#scopes-what-claude-remembers-and-where)
 5. [A day with dejavu](#a-day-with-dejavu)
@@ -19,8 +28,9 @@ remembering and the recalling itself. You just talk to it the way you always hav
 8. [Credentials are never stored](#credentials-are-never-stored)
 9. [Working with a team](#working-with-a-team)
 10. [When knowledge goes stale](#when-knowledge-goes-stale)
-11. [Command reference](#command-reference)
-12. [FAQ](#faq)
+11. [Claude Desktop and Cowork](#claude-desktop-and-cowork)
+12. [Command reference](#command-reference)
+13. [FAQ](#faq)
 
 ---
 
@@ -306,6 +316,34 @@ throw away, and what to leave alone.
 
 ---
 
+## Claude Desktop and Cowork
+
+Everything above assumes Claude can run shell commands next to the database — true in the
+terminal and in Xcode's built-in agent, and **not** true in Claude Desktop or Cowork. Their
+shells run in a sandbox that cannot see `~/.config/dejavu/` at all.
+
+For those, register dejavu as an MCP server:
+
+```bash
+dejavu install-mcp
+```
+
+Restart the app. Claude now has `search_knowledge`, `resume_knowledge`, `recent_knowledge`
+and the rest as tools, reading the same database as your terminal.
+
+**One difference: you have to say which project.** An MCP server is launched by the desktop
+app and has no working directory of its own, so it cannot guess which repository you mean.
+Name it and Claude will pass the path:
+
+```
+You:     what was I working on in MyApp yesterday?
+```
+
+With no project named, only your **user scope** is used — personal notes and cross-project
+context. In practice that is most of what you want from Claude Desktop anyway.
+
+---
+
 ## Command reference
 
 Claude runs most of these for you, so you will rarely type one yourself — but here they
@@ -322,6 +360,7 @@ are for when you need them.
 | `dejavu show <uid>` | Print an entry in full |
 | `dejavu stats` | See how much has piled up |
 | `dejavu rm <uid>` | Delete an entry |
+| `dejavu install-mcp` | Register the MCP server with Claude Desktop / Cowork |
 
 Add `--help` to any of them for the full set of options.
 

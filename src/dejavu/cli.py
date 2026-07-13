@@ -437,6 +437,83 @@ def cmd_recent(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_mcp(args: argparse.Namespace) -> int:
+    """Speak MCP on stdin/stdout. Launched by the host, not by a human."""
+    from . import mcp
+
+    return mcp.serve()
+
+
+# Hosts that launch stdio MCP servers, and where their config lives.
+MCP_HOSTS = {
+    "claude-desktop": Path.home()
+    / "Library/Application Support/Claude/claude_desktop_config.json",
+    "cowork": Path.home() / "Library/Application Support/Claude/claude_desktop_config.json",
+}
+
+
+def _mcp_binary() -> Path:
+    """The absolute path to write into a host's MCP config.
+
+    Absolute, because the host launches the server from an environment that does not
+    inherit your login shell — a bare `dejavu` would very likely not be found.
+
+    But *not* resolved through its symlinks. Homebrew's `/usr/local/bin/dejavu` points into
+    a version-stamped Cellar directory (`.../Cellar/dejavu/0.3.0/bin/dejavu`), and that
+    directory disappears on the next `brew upgrade`. Writing the resolved path would leave
+    the host launching a binary that no longer exists — and it would fail silently, months
+    later, for no reason the user could connect to anything they did.
+    """
+    from shutil import which
+
+    found = which(Path(sys.argv[0]).name)
+    if found:
+        return Path(found)
+    return Path(sys.argv[0]).absolute()
+
+
+def cmd_install_mcp(args: argparse.Namespace) -> int:
+    config_path = Path(args.config).expanduser() if args.config else MCP_HOSTS["claude-desktop"]
+
+    binary = _mcp_binary()
+    if not binary.exists():  # pragma: no cover - defensive
+        die(f"Cannot resolve the dejavu binary from {sys.argv[0]!r}")
+
+    config: dict = {}
+    if config_path.exists():
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+        except ValueError:
+            die(
+                f"{config_path} is not valid JSON. Fix or move it before running "
+                f"install-mcp, so this command does not destroy a config it cannot parse."
+            )
+
+    servers = config.setdefault("mcpServers", {})
+    if "dejavu" in servers and not args.force:
+        print(f"dejavu is already registered in {config_path}", file=sys.stderr)
+        print("  Use --force to overwrite it.", file=sys.stderr)
+        return EXIT_ERROR
+
+    servers["dejavu"] = {"command": str(binary), "args": ["mcp"]}
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(
+        json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+
+    print(f"✓ Registered the dejavu MCP server in {config_path}")
+    print(f"  command: {binary} mcp")
+    print()
+    print("Restart the host application to pick it up.")
+    print()
+    print("The server has no working directory of its own, so a project cannot be inferred.")
+    print("Tell Claude which repository you mean, and it will pass the path:")
+    print('  "search my MyApp project for the CoreData migration notes"')
+    print("Without a path, only the user scope is used.")
+    return EXIT_OK
+
+
 def cmd_show(args: argparse.Namespace) -> int:
     found = _find_anywhere(args.ref, scope_mod.resolve_read(args.scope))
     if not found:
@@ -693,6 +770,20 @@ def build_parser() -> argparse.ArgumentParser:
     add_scope(sp)
     add_json(sp)
     sp.set_defaults(func=cmd_stats)
+
+    sp = sub.add_parser(
+        "mcp",
+        help="run the MCP server on stdin/stdout (launched by the host, not by you)",
+    )
+    sp.set_defaults(func=cmd_mcp)
+
+    sp = sub.add_parser(
+        "install-mcp",
+        help="register the MCP server with Claude Desktop / Cowork",
+    )
+    sp.add_argument("--config", help="path to the host's JSON config (default: Claude Desktop)")
+    sp.add_argument("--force", action="store_true", help="overwrite an existing registration")
+    sp.set_defaults(func=cmd_install_mcp)
 
     return p
 
