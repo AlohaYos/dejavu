@@ -24,12 +24,13 @@ from .store import Entry, connect
 UTC = timezone.utc
 
 SNIPPET_LEN = 150
+DEFAULT_RECENT_SINCE = "2d"
 EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_NOT_FOUND = 2
 
-IMPORT_LINE = "@.knowledge/dejavu-triggers.md"
-GITIGNORE_LINES = [".knowledge/knowledge.db", ".knowledge/knowledge.db-*"]
+IMPORT_LINE = "@.dejavu/dejavu-triggers.md"
+GITIGNORE_LINES = [".dejavu/knowledge.db", ".dejavu/knowledge.db-*"]
 
 
 # ---------------------------------------------------------------- helpers
@@ -181,7 +182,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         return EXIT_OK
 
     root = Path.cwd()
-    kdir = root / scope_mod.KNOWLEDGE_DIR
+    kdir = root / scope_mod.DEJAVU_DIR
     created = not kdir.exists()
     kdir.mkdir(parents=True, exist_ok=True)
 
@@ -335,6 +336,102 @@ def cmd_list(args: argparse.Namespace) -> int:
 
     print()
     for entry, sc in collected:
+        print(_render(entry, sc, full=args.full))
+        print()
+    return EXIT_OK
+
+
+def cmd_resume(args: argparse.Namespace) -> int:
+    """Print the most recent context entry — the "where did we leave off" command."""
+    scopes = scope_mod.resolve_read(args.scope)
+
+    best: tuple[Entry, Scope] | None = None
+    for sc in scopes:
+        if not sc.db_path.exists():
+            continue
+        con = connect(sc)
+        try:
+            entry = store.latest_context(con, sc.name)
+        finally:
+            con.close()
+        if entry and (best is None or entry.updated_at > best[0].updated_at):
+            best = (entry, sc)
+
+    if best is None:
+        if args.json:
+            print("null")
+        else:
+            print("No handoff note found.", file=sys.stderr)
+            print(
+                "  Save one at the end of a session with /dejavu-save-context, or:\n"
+                '    dejavu add "NEXT: <what to do next>" --category context --body -',
+                file=sys.stderr,
+            )
+        return EXIT_NOT_FOUND
+
+    entry, sc = best
+
+    if args.json:
+        print(json.dumps(_entry_dict(entry, sc) | {"age": entry.age_phrase}, ensure_ascii=False,
+                         indent=2))
+        return EXIT_OK
+
+    scope_bit = "  [user]" if entry.scope == "user" else ""
+    print()
+    print(f"  [{entry.uid}] {entry.title} ({entry.category}){scope_bit}")
+    print(
+        f"  saved: {entry.local_date} ({entry.age_phrase})"
+        + (f"   keywords: {', '.join(entry.keywords)}" if entry.keywords else "")
+    )
+    print()
+    # Printed in full, never trimmed: the whole purpose of this command is to be read.
+    print(entry.body or "(no body)")
+    print()
+    return EXIT_OK
+
+
+def cmd_recent(args: argparse.Namespace) -> int:
+    """Recent activity, grouped by day — for "what have I been up to" and standup notes."""
+    scopes = scope_mod.resolve_read(args.scope)
+    since = _parse_since(args.since) or _parse_since(DEFAULT_RECENT_SINCE)
+    assert since is not None
+
+    collected: list[tuple[Entry, Scope]] = []
+    for sc in scopes:
+        if not sc.db_path.exists():
+            continue
+        con = connect(sc)
+        try:
+            for entry in store.recent_entries(
+                con, sc.name, since=since, category=args.category, limit=args.limit
+            ):
+                collected.append((entry, sc))
+        finally:
+            con.close()
+
+    collected.sort(key=lambda pair: pair[0].updated_at, reverse=True)
+    collected = collected[: args.limit]
+
+    if args.json:
+        print(
+            json.dumps(
+                [_entry_dict(e, sc) | {"date": str(e.local_date)} for e, sc in collected],
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return EXIT_OK if collected else EXIT_NOT_FOUND
+
+    if not collected:
+        print(f"No activity since {args.since or DEFAULT_RECENT_SINCE}.")
+        return EXIT_NOT_FOUND
+
+    print()
+    current_day = None
+    for entry, sc in collected:
+        if entry.local_date != current_day:
+            current_day = entry.local_date
+            print(f"  {current_day} ({entry.age_phrase})")
         print(_render(entry, sc, full=args.full))
         print()
     return EXIT_OK
@@ -538,6 +635,34 @@ def build_parser() -> argparse.ArgumentParser:
     add_scope(sp)
     add_json(sp)
     sp.set_defaults(func=cmd_list)
+
+    sp = sub.add_parser(
+        "resume",
+        help="print the latest handoff note — use this for 'continue from yesterday'",
+    )
+    add_scope(sp)
+    add_json(sp)
+    sp.set_defaults(func=cmd_resume)
+
+    sp = sub.add_parser(
+        "recent",
+        help="recent activity grouped by day — use this for 'what have I been working on'",
+    )
+    sp.add_argument(
+        "--since",
+        default=DEFAULT_RECENT_SINCE,
+        help=f"today | 2d | 2026-07-01 (default: {DEFAULT_RECENT_SINCE})",
+    )
+    sp.add_argument(
+        "--category",
+        choices=list(CATEGORIES),
+        help="default: context, plan and decision (research caches are excluded)",
+    )
+    sp.add_argument("--limit", type=int, default=50)
+    sp.add_argument("--full", action="store_true")
+    add_scope(sp)
+    add_json(sp)
+    sp.set_defaults(func=cmd_recent)
 
     sp = sub.add_parser("show", help="print an entry in full")
     sp.add_argument("ref", help="UID or numeric ID")

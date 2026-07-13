@@ -11,6 +11,6 @@ build/
 .fuse_hidden*
 
 # dejavu's own knowledge base. The DB is a rebuildable index; shared knowledge lives in
-# .knowledge/*.md, which stays tracked.
-.knowledge/knowledge.db
-.knowledge/knowledge.db-*
+# .dejavu/*.md, which stays tracked.
+.dejavu/knowledge.db
+.dejavu/knowledge.db-*

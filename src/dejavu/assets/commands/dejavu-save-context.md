@@ -4,8 +4,7 @@ description: Save this session's work as context so the next session can pick it
 
 Store what happened in this session in dejavu's `context` category.
 
-1. First run `dejavu search "next" --category context --limit 3` to see whether a
-   handoff note already exists.
+1. First run `dejavu resume` to see the existing handoff note, if there is one.
    - Continuing the same thread of work? Overwrite it: `dejavu edit <uid> --body -`
    - Different work? Add a new entry with `dejavu add`
 

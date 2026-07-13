@@ -11,9 +11,9 @@ from dejavu.store import connect
 
 @pytest.fixture
 def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """A temporary project holding a .knowledge/ dir, with the user scope isolated too."""
+    """A temporary project holding a .dejavu/ dir, with the user scope isolated too."""
     root = tmp_path / "proj"
-    (root / scope_mod.KNOWLEDGE_DIR).mkdir(parents=True)
+    (root / scope_mod.DEJAVU_DIR).mkdir(parents=True)
     monkeypatch.setenv("DEJAVU_HOME", str(tmp_path / "userhome"))
     monkeypatch.chdir(root)
     yield root

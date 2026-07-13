@@ -1,6 +1,6 @@
 """Scope resolution.
 
-- project scope: search upward from cwd for a .knowledge/ directory
+- project scope: search upward from cwd for a .dejavu/ directory
 - git worktree: every worktree shares the main worktree's DB (no configuration needed)
 - user scope: ~/.config/dejavu/knowledge.db (automatic fallback when no project is found)
 """
@@ -13,7 +13,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-KNOWLEDGE_DIR = ".knowledge"
+DEJAVU_DIR = ".dejavu"
 DB_NAME = "knowledge.db"
 CONFIG_NAME = "config.toml"
 TRIGGERS_NAME = "dejavu-triggers.md"
@@ -40,7 +40,7 @@ class Scope:
 
     @property
     def knowledge_dir(self) -> Path | None:
-        return self.root / KNOWLEDGE_DIR if self.root else None
+        return self.root / DEJAVU_DIR if self.root else None
 
 
 def user_home() -> Path:
@@ -90,31 +90,31 @@ def main_worktree_root(start: Path | None = None) -> Path | None:
 
 
 def find_project_root(start: Path | None = None) -> Path | None:
-    """Nearest ancestor directory containing .knowledge/, or None."""
+    """Nearest ancestor directory containing .dejavu/, or None."""
     here = (start or Path.cwd()).resolve()
 
     for d in [here, *here.parents]:
-        if (d / KNOWLEDGE_DIR).is_dir():
+        if (d / DEJAVU_DIR).is_dir():
             return d
 
-    # Inside a worktree where .knowledge/ has not been checked out: fall back to main.
+    # Inside a worktree where .dejavu/ has not been checked out: fall back to main.
     main = main_worktree_root(here)
-    if main is not None and (main / KNOWLEDGE_DIR).is_dir():
+    if main is not None and (main / DEJAVU_DIR).is_dir():
         return main
 
     return None
 
 
 def resolve_db_root(root: Path, start: Path | None = None) -> Path:
-    """Return the directory whose .knowledge/ holds the database.
+    """Return the directory whose .dejavu/ holds the database.
 
-    Careful: .knowledge/*.md is tracked by git, so `.knowledge/` gets checked out into
-    every linked worktree. Naively using root/.knowledge/knowledge.db would therefore
+    Careful: .dejavu/*.md is tracked by git, so `.dejavu/` gets checked out into
+    every linked worktree. Naively using root/.dejavu/knowledge.db would therefore
     create a SEPARATE database per worktree, breaking the "all worktrees share one
     knowledge base" guarantee. The DB always lives in the main worktree.
     """
     main = main_worktree_root(start or root)
-    if main is not None and main != root and (main / KNOWLEDGE_DIR).is_dir():
+    if main is not None and main != root and (main / DEJAVU_DIR).is_dir():
         return main
     return root
 
@@ -174,9 +174,9 @@ def project_scope(start: Path | None = None) -> Scope | None:
     db_root = resolve_db_root(root, start)  # worktrees share the main worktree's DB
     return Scope(
         name="project",
-        db_path=db_root / KNOWLEDGE_DIR / DB_NAME,
+        db_path=db_root / DEJAVU_DIR / DB_NAME,
         root=root,
-        stale_days=_load_stale_days(root / KNOWLEDGE_DIR / CONFIG_NAME),
+        stale_days=_load_stale_days(root / DEJAVU_DIR / CONFIG_NAME),
     )
 
 

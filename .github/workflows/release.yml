@@ -1,0 +1,103 @@
+name: Release
+
+# Push a tag, get a release and an updated Homebrew formula. Nothing by hand.
+#
+#   git tag v0.2.0 && git push origin v0.2.0
+#
+# Hand-copying a sha256 into a formula is the kind of step that eventually gets done
+# wrong, so it is automated here instead.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # needed to create the GitHub Release
+
+jobs:
+  release:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Check the tag matches __version__
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          SRC=$(grep -oE '__version__ = "[^"]+"' src/dejavu/__init__.py | cut -d'"' -f2)
+          echo "tag=$TAG  src=$SRC"
+          if [ "$TAG" != "$SRC" ]; then
+            echo "::error::Tag v$TAG does not match __version__ = $SRC in src/dejavu/__init__.py"
+            exit 1
+          fi
+
+      - name: Test
+        run: uv run --with pytest pytest -q
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes
+
+      - name: Compute the sha256 of the source tarball
+        id: tarball
+        run: |
+          URL="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
+          # The tarball GitHub generates for a tag can take a moment to become available.
+          for i in $(seq 1 10); do
+            if curl -fsSL -o source.tar.gz "$URL"; then break; fi
+            echo "tarball not ready yet (attempt $i); retrying"
+            sleep 5
+          done
+          SHA=$(shasum -a 256 source.tar.gz | cut -d' ' -f1)
+          echo "url=$URL"   >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA"   >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA"
+
+      - name: Check out the tap repository
+        uses: actions/checkout@v4
+        with:
+          repository: AlohaYos/homebrew-tap
+          token: ${{ secrets.TAP_TOKEN }}
+          path: tap
+
+      - name: Update the formula
+        env:
+          URL: ${{ steps.tarball.outputs.url }}
+          SHA: ${{ steps.tarball.outputs.sha }}
+        run: |
+          mkdir -p tap/Formula
+          cp packaging/dejavu.rb tap/Formula/dejavu.rb
+
+          # Rewrite the url and sha256 lines with this release's values.
+          perl -pi -e "s{^  url \".*\"\$}{  url \"$URL\"}"      tap/Formula/dejavu.rb
+          perl -pi -e "s{^  sha256 \".*\"\$}{  sha256 \"$SHA\"}" tap/Formula/dejavu.rb
+
+          cat tap/Formula/dejavu.rb
+
+          # Fail loudly rather than pushing a formula that would not install.
+          grep -q "$SHA" tap/Formula/dejavu.rb || {
+            echo "::error::sha256 was not written into the formula"; exit 1;
+          }
+          grep -q "$GITHUB_REF_NAME" tap/Formula/dejavu.rb || {
+            echo "::error::url was not written into the formula"; exit 1;
+          }
+
+      - name: Commit and push the formula
+        working-directory: tap
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/dejavu.rb
+          if git diff --cached --quiet; then
+            echo "formula unchanged; nothing to push"
+          else
+            git commit -m "dejavu ${GITHUB_REF_NAME}"
+            git push
+          fi

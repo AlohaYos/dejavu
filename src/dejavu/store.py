@@ -12,7 +12,7 @@ from __future__ import annotations
 import secrets
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from .scope import CATEGORIES, Scope
@@ -102,6 +102,31 @@ class Entry:
         threshold = stale_days.get(self.category, 14)
         age = (now() - _parse(self.checked_at)).days
         return age if age > threshold else None
+
+    @property
+    def local_date(self) -> date:
+        """The calendar day this entry was last updated, in the machine's local timezone.
+
+        Timestamps are stored in UTC, but "which day was this?" is a question about the
+        user's day, not UTC's. Grouping by the raw UTC date would file evening work in
+        Japan under the following day.
+        """
+        return _parse(self.updated_at).astimezone().date()
+
+    @property
+    def age_phrase(self) -> str:
+        """A human-readable age such as "today", "yesterday", "5 days ago".
+
+        Claude cannot tell a genuinely recent handoff note from a two-week-old fossil
+        by looking at an ISO timestamp, and would happily present the fossil as
+        "where we left off yesterday". Spell the age out.
+        """
+        days = (datetime.now().astimezone().date() - self.local_date).days
+        if days <= 0:
+            return "today"
+        if days == 1:
+            return "yesterday"
+        return f"{days} days ago"
 
 
 def now() -> datetime:
@@ -304,6 +329,52 @@ def list_entries(
         args.append(limit)
 
     rows = con.execute(sql, args).fetchall()
+    return [_row_to_entry(r, _keywords_of(con, r["id"]), scope_name) for r in rows]
+
+
+def latest_context(con: sqlite3.Connection, scope_name: str) -> Entry | None:
+    """The single most recent `context` entry, or None.
+
+    This deliberately does not go through search. Looking for a handoff note by querying
+    for words like "next" or "continue" misses whenever the note was titled something
+    else. "The newest context entry" is a deterministic condition that cannot miss.
+    """
+    row = con.execute(
+        """SELECT * FROM entries
+            WHERE category = 'context'
+            ORDER BY updated_at DESC
+            LIMIT 1"""
+    ).fetchone()
+    if row is None:
+        return None
+    return _row_to_entry(row, _keywords_of(con, row["id"]), scope_name)
+
+
+# Categories that answer "what have I been working on", as opposed to "what do I know".
+# `feature` and `note` are research caches: including them would bury an activity log
+# in noise. They can still be requested explicitly with --category.
+ACTIVITY_CATEGORIES = ("context", "plan", "decision")
+
+
+def recent_entries(
+    con: sqlite3.Connection,
+    scope_name: str,
+    *,
+    since: str,
+    category: str | None = None,
+    limit: int = 50,
+) -> list[Entry]:
+    """Entries touched since a timestamp, newest first."""
+    categories = (category,) if category else ACTIVITY_CATEGORIES
+    placeholders = ",".join("?" * len(categories))
+    rows = con.execute(
+        f"""SELECT * FROM entries
+             WHERE updated_at >= ?
+               AND category IN ({placeholders})
+             ORDER BY updated_at DESC
+             LIMIT ?""",
+        (since, *categories, limit),
+    ).fetchall()
     return [_row_to_entry(r, _keywords_of(con, r["id"]), scope_name) for r in rows]
 
 
