@@ -268,19 +268,17 @@ right there.
 
 ## Working with a team
 
-`dejavu` keeps two kinds of knowledge apart.
+**Today, dejavu is a personal tool.** The knowledge base is a database that is not tracked
+by git, so what Claude learns stays on your machine. Nothing you store leaks into a pull
+request, and nothing a teammate stores reaches you.
 
-- **Shared knowledge** — architecture, design decisions, team conventions. Written out to
-  `.dejavu/*.md`, **tracked by git**, and reviewed in pull requests like any other file
-- **Local knowledge** — Claude's research cache. It lives only in the database, which is
-  not tracked by git. Disposable, and yours alone
+Only the instructions file (`.dejavu/dejavu-triggers.md`) is committed, so a teammate who
+clones the repository gets a Claude that knows how to *use* dejavu — with an empty
+knowledge base of their own.
 
-In other words: **your teammates get the decisions and the conventions, and none of your
-"wait, what does this function do again" lookups.** When someone new clones the repository,
-their Claude already knows why the architecture is the way it is.
-
-The database itself is never committed. It is only an index, rebuildable from the Markdown
-at any time.
+Sharing knowledge across a team is a design that exists but has not been built: exporting
+selected entries to `.dejavu/*.md`, tracked by git and reviewed in pull requests like any
+other file. See [BACKLOG.md](docs/BACKLOG.md).
 
 ---
 

@@ -93,9 +93,10 @@ rebuildable index) is designed but not implemented. `storage`, `source_path` and
 - ADR support: `status` transitions and bidirectional `supersede` links (the `links` table
   is already there)
 
-The README already promises this behaviour to users ("shared knowledge is tracked by git,
-reviewed in pull requests"). **Until it ships, that section of the README is aspirational.**
-Either build it or soften the wording.
+The README's "Working with a team" section used to describe this as though it already
+worked. It now says plainly that dejavu is a personal tool today, and points here.
+
+Keep it that way: **do not describe sharing in the README until the code is there.**
 
 ---
 
