@@ -1,9 +1,31 @@
 # dejavu
 
-dejavu gives Claude Code a long-term memory — one that survives across sessions.
+**A Time Machine for AI.** Just as macOS Time Machine brings a lost file back to the way
+it was at some point in the past, dejavu brings Claude back to the state it was in when it
+had *just* figured your code out.
 
-**You will hardly ever type a dejavu command.** After a one-time setup, Claude does the
-remembering and the recalling itself. You just talk to it the way you always have.
+By default, Claude forgets everything the moment a session ends. The next morning it opens
+the same files and spends the same time and tokens arriving at the very same conclusion.
+dejavu is a long-term memory: Claude writes down what it has learned, on your own machine,
+and reads it back when it needs it.
+
+**You will hardly ever type a dejavu command.** Claude decides when to remember and when
+to recall, from the flow of the conversation. For example —
+
+*Remembering (saving)*
+
+- You reach a stopping point, or say "save this" → it records what's done and what to do next
+- It makes a design decision → recorded as a decision
+- It investigates the code and figures something out → the finding is saved
+
+*Recalling (reading back)*
+
+- "continue from yesterday" / "where did we leave off" → it restores the last handoff note
+- "what am I working on?" → it lists recent work
+- before reading unfamiliar code → it searches what it learned before
+
+You just talk to it the way you always have. Claude quietly remembers and recalls as each
+of these moments comes up.
 
 ---
 
