@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from importlib import resources
 from pathlib import Path
 
-from . import __version__, preflight, safety, store
+from . import __version__, obsidian, preflight, safety, store
 from . import scope as scope_mod
 from .scope import CATEGORIES, STATUSES, Scope
 from .search import search as run_search
@@ -30,7 +30,14 @@ EXIT_ERROR = 1
 EXIT_NOT_FOUND = 2
 
 IMPORT_LINE = "@.dejavu/dejavu-triggers.md"
-GITIGNORE_LINES = [".dejavu/knowledge.db", ".dejavu/knowledge.db-*"]
+GITIGNORE_LINES = [
+    ".dejavu/knowledge.db",
+    ".dejavu/knowledge.db-*",
+    # An index of docs/knowledge/*.md, rebuilt from files that are themselves tracked.
+    # Committing it would put a binary in every review for no gain.
+    ".dejavu/shared.db",
+    ".dejavu/shared.db-*",
+]
 
 
 # ---------------------------------------------------------------- helpers
@@ -87,6 +94,8 @@ def _entry_dict(entry: Entry, scope: Scope) -> dict:
         "uid": entry.uid,
         "id": entry.id,
         "scope": entry.scope,
+        "source": entry.scope,
+        "file": entry.source_path,
         "title": entry.title,
         "body": entry.body,
         "category": entry.category,
@@ -106,12 +115,14 @@ def _render(entry: Entry, scope: Scope, *, full: bool = False) -> str:
     bits = [f"({entry.category})"]
     if entry.status:
         bits.append(f"[{entry.status}]")
-    if entry.scope == "user":
-        bits.append("[user]")
+    if entry.scope != "project":
+        bits.append(f"[{entry.scope}]")
     if stale:
         bits.append(f"[STALE: {stale} days since last check]")
 
     lines = [f"{mark} [{entry.uid}] {entry.title} {' '.join(bits)}"]
+    if entry.source_path:
+        lines.append(f"       File: {entry.source_path}")
     if entry.keywords:
         lines.append(f"       Keywords: {', '.join(entry.keywords)}")
     if entry.body:
@@ -160,6 +171,82 @@ def _install_commands(dest: Path) -> None:
     for item in src.iterdir():
         if item.name.endswith(".md"):
             (dest / item.name).write_text(item.read_text(encoding="utf-8"), encoding="utf-8")
+
+
+# ---------------------------------------------------------------- vault prompts
+#
+# Everything below is printed *by the command that just ran*, never added to
+# dejavu-triggers.md. The triggers file is read on every single turn of every session, so
+# a rule parked there is paid for constantly and used almost never. Emitting the same
+# guidance from the command that detected the situation costs nothing until it fires.
+
+CONFLICT_TOP_N = 5
+PROJECT_SIDE = ("project", "shared")
+
+CONFLICT_BANNER = "  ⚠ CONFLICT RISK — the project and the vault both answer this query:"
+CONFLICT_INSTRUCTION = (
+    "\n    They may disagree. Read both before you act on either.\n"
+    "    If they do disagree, do not choose silently: show the user both versions, ask\n"
+    "    which one to adopt, and then correct the other side."
+)
+
+PROMOTE_PROMPT = {
+    "ask": (
+        "  ? Does this apply beyond this repository? If so, ask the user:\n"
+        "      1. yes (this time)   2. no (this time)   3. always yes   4. always no\n"
+        '    On yes:  dejavu obsidian add "<title>" --tags "..." --body -\n'
+        "    On 3/4:  dejavu config promote always|never"
+    ),
+    "always": (
+        "  → promote = always. If this applies beyond this repository, save it to the\n"
+        '    vault now without asking:  dejavu obsidian add "<title>" --body -'
+    ),
+}
+
+RESEARCH_PROMPT = {
+    "all": (
+        "  → research = all. Mirror this to the vault:\n"
+        '      dejavu research "<title>" --body -'
+    ),
+    "findings": (
+        "  → research = findings. If this holds a reusable finding rather than just\n"
+        '    today\'s state:  dejavu research "<title>" --body -'
+    ),
+}
+
+
+def vault_followup(entry: Entry, scope: Scope, research_override: str | None = None) -> list[str]:
+    """Guidance to print after a project entry is saved, if a vault is configured."""
+    cfg = scope_mod.obsidian_config()
+    if not cfg.enabled or scope.name != "project":
+        return []
+    if entry.category == "context":
+        return [line for line in [RESEARCH_PROMPT.get(research_override or cfg.research)] if line]
+    return [line for line in [PROMOTE_PROMPT.get(cfg.promote)] if line]
+
+
+def _conflict_side(pair: tuple) -> dict:
+    hit, sc = pair
+    return {
+        "source": sc.name,
+        "uid": hit.entry.uid,
+        "title": hit.entry.title,
+        "file": hit.entry.source_path,
+    }
+
+
+def find_conflict(results: list[tuple]) -> list[dict]:
+    """Both sides answered the same question, so they might contradict each other.
+
+    Nothing here judges whether they actually disagree — that needs reading, which is the
+    model's job. Detection stops at "these two are about to be used together".
+    """
+    top = results[:CONFLICT_TOP_N]
+    project = next((p for p in top if p[1].name in PROJECT_SIDE), None)
+    vault = next((p for p in top if p[1].name == "obsidian"), None)
+    if project is None or vault is None:
+        return []
+    return [_conflict_side(project), _conflict_side(vault)]
 
 
 # ---------------------------------------------------------------- commands
@@ -266,11 +353,15 @@ def cmd_add(args: argparse.Namespace) -> int:
         print(f"✓ Saved [{entry.uid}] ({entry.category}, {scope.name} scope)")
         if entry.keywords:
             print(f"  Keywords: {', '.join(entry.keywords)}")
+        for line in vault_followup(entry, scope, getattr(args, "research", None)):
+            print(line)
     return EXIT_OK
 
 
 def cmd_search(args: argparse.Namespace) -> int:
     scopes = scope_mod.resolve_read(args.scope)
+    if args.scope is None:
+        scopes = obsidian.with_indexes(scopes, scope_mod.find_project_root())
     results = run_search(
         scopes,
         args.query,
@@ -278,19 +369,18 @@ def cmd_search(args: argparse.Namespace) -> int:
         since=_parse_since(args.since),
         limit=args.limit,
     )
+    conflict = find_conflict(results)
 
     if args.json:
-        print(
-            json.dumps(
-                [
-                    _entry_dict(hit.entry, sc)
-                    | {"score": round(hit.score, 3), "tiers": hit.tiers}
-                    for hit, sc in results
-                ],
-                ensure_ascii=False,
-                indent=2,
-            )
-        )
+        payload: dict = {
+            "results": [
+                _entry_dict(hit.entry, sc) | {"score": round(hit.score, 3), "tiers": hit.tiers}
+                for hit, sc in results
+            ]
+        }
+        if conflict:
+            payload["conflict_candidates"] = conflict
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
         return EXIT_OK if results else EXIT_NOT_FOUND
 
     if not results:
@@ -300,6 +390,12 @@ def cmd_search(args: argparse.Namespace) -> int:
     print()
     for hit, sc in results:
         print(_render(hit.entry, sc, full=args.full))
+        print()
+    if conflict:
+        print(CONFLICT_BANNER)
+        for side in conflict:
+            print(f"    {side['source']:9} [{side['uid']}] {side['title']}")
+        print(CONFLICT_INSTRUCTION)
         print()
     return EXIT_OK
 
@@ -654,12 +750,275 @@ def cmd_stats(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------- parser
 
 
+# ---------------------------------------------------------------- obsidian / config
+
+PRESETS: dict[str, list[str]] = {
+    "none": [],
+    "dev": ["API", "Architecture", "Patterns", "Tools"],
+}
+
+CONFIG_KEYS = (
+    "vault",
+    "include",
+    "knowledge_dir",
+    "userinfo_dir",
+    "research_dir",
+    "write_mode",
+    "research",
+    "promote",
+)
+
+CROWDED_FOLDER = 100
+
+
+def _require_vault(cli_vault: str | None = None) -> tuple[Path, scope_mod.ObsidianConfig]:
+    cfg = scope_mod.obsidian_config()
+    vault = Path(cli_vault).expanduser() if cli_vault else cfg.vault
+    if vault is None:
+        die(
+            "No Obsidian vault configured.\n"
+            "  dejavu obsidian init <path-to-vault>\n"
+            "  A vault is just a folder of Markdown; see https://help.obsidian.md/vault"
+        )
+        raise AssertionError  # pragma: no cover
+    if not vault.is_dir():
+        die(f"Not a directory: {vault}")
+    return vault, cfg
+
+
+def cmd_obsidian_init(args: argparse.Namespace) -> int:
+    vault = Path(args.vault).expanduser()
+    if not vault.is_dir():
+        die(f"Not a directory: {vault}\n  Create the vault in Obsidian first.")
+
+    scope_mod.set_config_value(scope_mod.user_config_path(), "obsidian", "vault", str(vault))
+    cfg = scope_mod.obsidian_config()
+
+    created: list[str] = []
+    for folder in (cfg.knowledge_dir, cfg.userinfo_dir, cfg.research_dir):
+        path = vault / folder
+        if not path.exists():
+            path.mkdir(parents=True)
+            created.append(folder)
+    for folder in PRESETS[args.preset]:
+        path = vault / cfg.knowledge_dir / folder
+        if not path.exists():
+            path.mkdir(parents=True)
+            created.append(f"{cfg.knowledge_dir}/{folder}")
+
+    stats = obsidian.sync_vault(cfg, force=True)
+    mode, reason = obsidian.effective_write_mode(vault, cfg.write_mode)
+
+    print(f"✓ Vault registered: {vault}")
+    if created:
+        print(f"  Created: {', '.join(created)}")
+    if stats:
+        print(f"  Indexed {stats.total} notes from {', '.join(stats.scanned_dirs or [])}")
+    print(f"  Write mode: {mode} — {reason}")
+    if args.preset == "none":
+        print(
+            f"  {cfg.knowledge_dir}/ is flat. Make any subfolders you like and dejavu will\n"
+            f"  file notes into them; it never invents folders of its own."
+        )
+    return EXIT_OK
+
+
+def cmd_obsidian_sync(args: argparse.Namespace) -> int:
+    _, cfg = _require_vault()
+    stats = obsidian.sync_vault(cfg, force=True)
+    assert stats is not None
+    root = scope_mod.find_project_root()
+    shared = obsidian.sync_shared(root) if root else None
+
+    if args.json:
+        payload = {"obsidian": stats.as_dict()}
+        if shared:
+            payload["shared"] = shared.as_dict()
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return EXIT_OK
+
+    print(
+        f"✓ Vault: +{stats.added} added, {stats.updated} updated, "
+        f"-{stats.removed} removed ({stats.total} total)"
+    )
+    if shared:
+        print(
+            f"  {obsidian.SHARED_DIR}: +{shared.added} added, {shared.updated} updated, "
+            f"-{shared.removed} removed ({shared.total} total)"
+        )
+    return EXIT_OK
+
+
+def cmd_obsidian_doctor(args: argparse.Namespace) -> int:
+    vault, cfg = _require_vault(args.vault)
+    mode, reason = obsidian.effective_write_mode(vault, cfg.write_mode)
+    scope = scope_mod.obsidian_scope()
+    counts = {folder: obsidian.count_in_folder(scope, folder) for folder in cfg.include}
+    indexed = sum(counts.values())
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "vault": str(vault),
+                    "write_mode": mode,
+                    "reason": reason,
+                    "indexed": indexed,
+                    "by_folder": counts,
+                    "research": cfg.research,
+                    "promote": cfg.promote,
+                    "index_db": str(scope.db_path),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return EXIT_OK
+
+    print(f"Vault       {vault}")
+    print(f"Index       {scope.db_path} ({indexed} notes)")
+    for folder, count in counts.items():
+        print(f"              {folder}/  {count}")
+    print(f"Write mode  {mode}")
+    print(f"              because {reason}")
+    print(f"Settings    research = {cfg.research}, promote = {cfg.promote}")
+    if not scope.db_path.exists():
+        print("\n  Not indexed yet. Run: dejavu obsidian sync")
+    crowded = [f for f, c in counts.items() if c > CROWDED_FOLDER]
+    for folder in crowded:
+        print(
+            f"\n  {folder}/ holds {counts[folder]} notes. Search does not care, but the file\n"
+            f"  explorer will. Consider grouping them into subfolders — dejavu will follow."
+        )
+    return EXIT_OK
+
+
+def cmd_obsidian_add(args: argparse.Namespace) -> int:
+    vault, cfg = _require_vault()
+    body = _read_body(args.body)
+
+    found = safety.find_secrets(f"{args.title}\n{body}")
+    if found and not args.force:
+        die(
+            "Possible secret detected: "
+            + ", ".join(found)
+            + "\n  Never store credentials in the vault."
+            + "\n  Use --force if this is a false positive."
+        )
+
+    base = vault / cfg.knowledge_dir
+    mode, reason = obsidian.effective_write_mode(vault, cfg.write_mode)
+    existing = obsidian.find_note(base, args.title)
+
+    try:
+        if existing is not None and args.replace:
+            obsidian.replace_body(existing, body, mode=mode)
+            path, verb = existing, "Replaced"
+        elif existing is not None:
+            obsidian.append_to_note(existing, body)
+            path, verb = existing, "Appended to"
+        else:
+            path = obsidian.create_note(
+                obsidian._category_dir(base, args.category),
+                args.title,
+                body,
+                category=args.category,
+                tags=store.normalize_keywords(args.tags),
+                project=args.project,
+            )
+            verb = "Wrote"
+    except obsidian.WriteRefused as exc:
+        die(str(exc))
+        raise AssertionError from exc  # pragma: no cover
+
+    obsidian.sync_vault(cfg, force=True)
+    rel = path.relative_to(vault)
+    if args.json:
+        print(json.dumps({"file": rel.as_posix(), "action": verb.lower()}, ensure_ascii=False))
+    else:
+        print(f"✓ {verb} {rel.as_posix()}  ({mode})")
+    return EXIT_OK
+
+
+def cmd_research(args: argparse.Namespace) -> int:
+    vault, cfg = _require_vault()
+    body = _read_body(args.body)
+
+    found = safety.find_secrets(f"{args.title}\n{body}")
+    if found and not args.force:
+        die("Possible secret detected: " + ", ".join(found) + "\n  Use --force to override.")
+
+    root = scope_mod.find_project_root()
+    project = args.project or (root.name if root else None)
+    if not project:
+        die("No project could be inferred. Pass --project <name>.")
+
+    day = datetime.now().astimezone().strftime("%Y-%m-%d")
+    path = obsidian.create_note(
+        vault / cfg.research_dir / project,
+        args.title,
+        body,
+        tags=store.normalize_keywords(args.tags),
+        project=project,
+        filename=f"{day}-{obsidian.slugify(args.title)}",
+    )
+    obsidian.sync_vault(cfg, force=True)
+
+    rel = path.relative_to(vault).as_posix()
+    if args.json:
+        print(json.dumps({"file": rel, "project": project}, ensure_ascii=False))
+    else:
+        print(f"✓ Wrote {rel}")
+    return EXIT_OK
+
+
+def cmd_config(args: argparse.Namespace) -> int:
+    path = scope_mod.user_config_path()
+    cfg = scope_mod.obsidian_config()
+    current = {
+        "vault": str(cfg.vault) if cfg.vault else "",
+        "include": ", ".join(cfg.include),
+        "knowledge_dir": cfg.knowledge_dir,
+        "userinfo_dir": cfg.userinfo_dir,
+        "research_dir": cfg.research_dir,
+        "write_mode": cfg.write_mode,
+        "research": cfg.research,
+        "promote": cfg.promote,
+    }
+
+    if args.key is None:
+        print(f"{path}\n")
+        for key, value in current.items():
+            print(f"  {key:14} {value}")
+        return EXIT_OK
+
+    if args.key not in CONFIG_KEYS:
+        die(f"Unknown key: {args.key} (expected one of: {', '.join(CONFIG_KEYS)})")
+
+    if args.value is None:
+        print(current[args.key])
+        return EXIT_OK
+
+    allowed = scope_mod.OBSIDIAN_CHOICES.get(args.key)
+    if allowed and args.value not in allowed:
+        die(f"Invalid value for {args.key}: {args.value} (expected one of: {', '.join(allowed)})")
+
+    scope_mod.set_config_value(path, "obsidian", args.key, args.value)
+    print(f"✓ {args.key} = {args.value}")
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="dejavu",
         description="A local knowledge base that lets Claude Code pick up where it left off.",
     )
     p.add_argument("--version", action="version", version=f"dejavu {__version__}")
+    p.add_argument(
+        "--research",
+        choices=("all", "findings", "manual"),
+        help="override the research policy for this call (default: from config.toml)",
+    )
     sub = p.add_subparsers(dest="command", required=True)
 
     def add_scope(sp: argparse.ArgumentParser) -> None:
@@ -776,6 +1135,57 @@ def build_parser() -> argparse.ArgumentParser:
         help="run the MCP server on stdin/stdout (launched by the host, not by you)",
     )
     sp.set_defaults(func=cmd_mcp)
+
+    sp = sub.add_parser("obsidian", help="index and write to an Obsidian vault")
+    obs = sp.add_subparsers(dest="obsidian_command", required=True)
+
+    osp = obs.add_parser("init", help="register a vault and index it")
+    osp.add_argument("vault", help="path to the vault folder")
+    osp.add_argument(
+        "--preset",
+        choices=list(PRESETS),
+        default="none",
+        help="starter folders under Knowledge/ (default: none — stay flat)",
+    )
+    osp.set_defaults(func=cmd_obsidian_init)
+
+    osp = obs.add_parser("sync", help="refresh the index from the Markdown on disk")
+    add_json(osp)
+    osp.set_defaults(func=cmd_obsidian_sync)
+
+    osp = obs.add_parser("doctor", help="vault path, write mode and why, index counts")
+    osp.add_argument("--vault", help="check a different vault without changing the config")
+    add_json(osp)
+    osp.set_defaults(func=cmd_obsidian_doctor)
+
+    osp = obs.add_parser("add", help="write a note into the vault's Knowledge folder")
+    osp.add_argument("title")
+    osp.add_argument("--body", help="body text; '-' or omitted reads from stdin")
+    osp.add_argument("--category", help="a subfolder of Knowledge/, used only if it exists")
+    osp.add_argument("--tags", help="comma-separated; written to the note's frontmatter")
+    osp.add_argument("--project", help="the project this was learned in")
+    osp.add_argument(
+        "--replace",
+        action="store_true",
+        help="replace the body of an existing note (refused on a synced vault)",
+    )
+    osp.add_argument("--force", action="store_true", help="ignore secret warnings")
+    add_json(osp)
+    osp.set_defaults(func=cmd_obsidian_add)
+
+    sp = sub.add_parser("research", help="record an investigation in the vault")
+    sp.add_argument("title")
+    sp.add_argument("--body", help="body text; '-' or omitted reads from stdin")
+    sp.add_argument("--project", help="default: the current project directory name")
+    sp.add_argument("--tags", help="comma-separated")
+    sp.add_argument("--force", action="store_true", help="ignore secret warnings")
+    add_json(sp)
+    sp.set_defaults(func=cmd_research)
+
+    sp = sub.add_parser("config", help="show or change the [obsidian] settings")
+    sp.add_argument("key", nargs="?", choices=list(CONFIG_KEYS))
+    sp.add_argument("value", nargs="?")
+    sp.set_defaults(func=cmd_config)
 
     sp = sub.add_parser(
         "install-mcp",

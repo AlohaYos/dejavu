@@ -1,408 +1,612 @@
 # dejavu
 
-**A Time Machine for AI.** Just as macOS Time Machine brings a lost file back to the way
-it was at some point in the past, dejavu brings Claude back to the state it was in when it
-had *just* figured your code out.
+**Memory for Claude.**
 
-By default, Claude forgets everything the moment a session ends. The next morning it opens
-the same files and spends the same time and tokens arriving at the very same conclusion.
-dejavu is a long-term memory: Claude writes down what it has learned, on your own machine,
-and reads it back when it needs it.
+When you work with Claude, things move fast in the moment. But close the window, come
+back the next day, and Claude remembers none of it. You explain the background again.
+You have it look up the same things again.
 
-**You will hardly ever type a dejavu command.** Claude decides when to remember and when
-to recall, from the flow of the conversation. For example —
+dejavu gives Claude somewhere on your own machine to write down what it worked out, and
+reads it back when it is needed. With it in place, Claude can start from "where we left
+off yesterday".
 
-*Remembering (saving)*
+dejavu also pairs with **Obsidian**, a free notes app. Together, what Claude remembers
+becomes notes *you* can read back — and the same knowledge becomes available from every
+way you reach Claude: the terminal, Claude Desktop chat, Cowork, and Xcode.
 
-- You reach a stopping point, or say "save this" → it records what's done and what to do next
-- It makes a design decision → recorded as a decision
-- It investigates the code and figures something out → the finding is saved
+Everything stays on your own machine. No network access, no account, no subscription.
 
-*Recalling (reading back)*
-
-- "continue from yesterday" / "where did we leave off" → it restores the last handoff note
-- "what am I working on?" → it lists recent work
-- before reading unfamiliar code → it searches what it learned before
-
-You just talk to it the way you always have. Claude quietly remembers and recalls as each
-of these moments comes up.
+[日本語](README.ja.md)
 
 ---
 
 ## Table of contents
 
 1. [What problem this solves](#what-problem-this-solves)
-2. [Install (once, from the command line)](#install-once-from-the-command-line)
-3. [Add it to a project](#add-it-to-a-project)
-4. [Scopes: what Claude remembers, and where](#scopes-what-claude-remembers-and-where)
-5. [A day with dejavu](#a-day-with-dejavu)
-6. [The four things you actually say](#the-four-things-you-actually-say)
-7. [What gets stored](#what-gets-stored)
-8. [Credentials are never stored](#credentials-are-never-stored)
-9. [Working with a team](#working-with-a-team)
-10. [When knowledge goes stale](#when-knowledge-goes-stale)
-11. [Claude Desktop and Cowork](#claude-desktop-and-cowork)
-12. [Command reference](#command-reference)
-13. [FAQ](#faq)
+2. [What dejavu remembers](#what-dejavu-remembers)
+3. [How this differs from Claude's own memory](#how-this-differs-from-claudes-own-memory)
+4. [What changes when you add Obsidian](#what-changes-when-you-add-obsidian)
+5. [What goes where](#what-goes-where)
+6. [What it looks like in use](#what-it-looks-like-in-use)
+7. [Install](#install)
+8. [Using it from each surface (chat, Cowork, terminal, Xcode)](#using-it-from-each-surface)
+9. [If you already use Obsidian](#if-you-already-use-obsidian)
+10. [FAQ](#faq)
+11. [Going deeper](#going-deeper)
 
 ---
 
 ## What problem this solves
 
-Say you spend hours reading through a program with Claude Code. Claude opens the files,
-traces the call graph, works out why that one function is written so strangely. You make
-progress. You close the session.
+Let us start with the situations dejavu is for. If any of these sound familiar, it will
+help.
 
-The next morning you open a fresh session and **Claude remembers none of it.** It opens
-the same files, follows the same functions, and spends the same tokens arriving at exactly
-the conclusion it reached yesterday.
+### Situation 1: tomorrow, you start over
 
-The same thing happens *within* a long session. As the context fills up the answers get
-worse, so you want to switch to a fresh one — but switching throws away everything Claude
-learned.
+You spend hours working something out with Claude. It opens file after file, traces how
+things fit together, works out why one piece is written so strangely. You decide on an
+approach. Real progress. You close the window.
 
-This is where dejavu comes in.
-dejavu is a local database that Claude writes what it learns into, and reads back from
-when it needs it. A memory that outlives the session.
+The next morning you open a fresh session, and Claude **remembers none of it.** It opens
+the same files, follows the same trail, spends the same tokens, and arrives at exactly the
+conclusion it reached yesterday. You explain the background from scratch.
+
+### Situation 2: you cannot move a long conversation somewhere fresh
+
+As a conversation gets long, the answers get worse. You want to move to a new one — but
+the moment you do, every piece of shared context is gone. So you either put up with the
+long session or start explaining all over again.
+
+### Situation 3: you are researching something you already researched
+
+"I'm sure I looked this up before" — but you cannot remember where you wrote it down. Or
+you never wrote it down at all. Either way you do the work twice.
+
+### What dejavu does about it
+
+All three have the same root cause: **too little of what Claude learns is retained.**
+
+dejavu gives it a place on your machine to write things down. Claude saves there
+automatically as it works, and reads back automatically when it needs to.
 
 ```
-Session 1                      Session 2 (the next day)
-──────────                     ────────────────────────
-Claude reads the code          You: "continue from yesterday"
-Claude works things out        Claude runs `dejavu resume`
-Claude saves what it found     Claude reads yesterday's handoff note
-                               Claude picks up exactly where it stopped
-        │                                    ▲
-        └────────── .dejavu/ ────────────────┘
-                (a local database file)
+Day 1                            Day 2
+────────                         ────────
+Claude investigates              You: "continue from yesterday"
+Claude works it out              Claude reads what it wrote
+Claude writes it down            Claude picks up where it stopped
+      │                                    ▲
+      └────────── .dejavu/ ────────────────┘
+              (a store on your machine)
 ```
-
-Everything dejavu remembers stays on your own machine. No network access, no account, no
-sync service. And it is free.
 
 ---
 
-## Install (once, from the command line)
+## What dejavu remembers
+
+The previous section described the problem. This one covers what you actually get.
+
+Roughly, dejavu keeps four kinds of thing:
+
+| Kind | Example |
+| --- | --- |
+| **Where you stopped** | "Finished the migration. Next: rollback tests" |
+| **What an investigation found** | "This runs in three phases, and here is why" |
+| **Decisions** | "Chose B over A, because…" |
+| **Work put off** | "Not touching that warning today. Fix it later" |
+
+Which lets conversations like this happen:
+
+```
+You:     continue from yesterday
+
+Claude:  Yesterday you got the document reorganised as far as chapter 3 and stopped
+         there. The next step was checking the references. Shall we carry on?
+```
+
+```
+You:     what have I been working on?
+
+Claude:  Over the last three days: Monday you settled the approach, Tuesday you drafted
+         it, and Wednesday you were investigating a bug.
+```
+
+### There are no commands to learn
+
+This is the part that matters most. **You will hardly ever type a dejavu command.**
+
+When to save and when to recall is decided by Claude, from the flow of the conversation.
+You just talk to it the way you always have. In practice, there are about four things
+worth saying deliberately:
+
+| Say this | Claude does this |
+| --- | --- |
+| "continue from yesterday" | Reads the last handoff note and resumes |
+| "save what we did today" | Writes today up for next time |
+| "remember that for later" | Records a side task without breaking your focus |
+| "note down where we've got to" | Saves this conversation's state for a different session |
+| "what have I been working on?" | Summarises recent activity |
+
+---
+
+## How this differs from Claude's own memory
+
+"Claude Code already has memory of its own (`CLAUDE.md`, `MEMORY.md`). Isn't that enough?"
+
+—— It does. And **it does not compete with dejavu. They do different jobs, so use both.**
+
+What Claude Code has is a **notepad** left open on the desk. It is opened automatically at
+the start of a conversation, so you can read and write it straight away with no setup. But
+the notepad is thin: **there is a limit to how much fits, and no way to search what has
+piled up.** The more that gets written, the more the older pages are pushed out and lost.
+
+dejavu is more like a **diary**. What you did, what you decided, what comes next — written
+down with the date on it. Then, when you say "continue from yesterday", it opens that
+day's page. **Because it is not all re-read every time, no number of volumes slows the
+conversation down.** A page from six months ago is still there if you go looking.
+
+The other difference is **reach**. Claude Code's notepad belongs to Claude Code on that one
+machine; chat and Cowork cannot see it. With dejavu, every surface reads and writes the
+same diary.
+
+| | Claude's own memory | dejavu |
+| --- | --- | --- |
+| Think of it as | **a thin notepad on the desk** | **a diary / daily log** |
+| Good at | working immediately, no setup | being found and pulled back out |
+| As it grows | anything past the limit is buried, then lost | nothing gets buried |
+| Where it works | Claude Code only | every surface |
+
+To be straight about it: **if you have few notes, one project, and only ever use Claude
+Code, Claude's own memory is enough.** dejavu starts to pay off once knowledge accumulates.
+
+> The mechanics (how `CLAUDE.md` and auto memory divide the work, the size limit on what
+> is loaded, how claude.ai's memory relates to all this) are in
+> [REFERENCE.md](docs/REFERENCE.md).
+
+---
+
+## What changes when you add Obsidian
+
+Everything above works with **dejavu alone.** Obsidian is not required.
+
+But two gaps remain if you stop there:
+
+- **You cannot read back what was saved.** dejavu's store is a database, so Claude reads
+  and writes it happily, but you cannot open it
+- **Claude Desktop chat cannot use it.** More on why below — chat has no way to reach
+  files on your machine
+
+Adding Obsidian solves both.
+
+### What Obsidian is
+
+[Obsidian](https://obsidian.md) is a free notes app. What matters here is that its notes
+are **not stored in a proprietary format** — they are ordinary text files (Markdown)
+sitting in a folder on your machine.
+
+Obsidian calls that folder a **vault**. It is a folder, with text files in it.
+
+### The three memories
+
+The previous section called Claude's own memory a **notepad** and dejavu a **diary**.
+Following that line, Obsidian is **documents filed on a bookshelf**.
+
+Where a diary records *when you did what*, these documents hold **knowledge you will reach
+for again**. They are filed by subject, they stay on the shelf after a project ends, and
+they can still be pulled out years later. And the decisive difference: **you can take them
+down and read them yourself.**
+
+| | Claude's own memory | dejavu | Obsidian |
+| --- | --- | --- | --- |
+| Think of it as | **a notepad on the desk** | **a diary / daily log** | **documents on a bookshelf** |
+| What goes in | whatever it just noticed | what you did and decided today | knowledge you reach for again; facts about you |
+| When it is read | every time, automatically | when that project comes up | whenever it might be relevant, any project |
+| How long it lasts | pushed out as it fills | as long as the project runs | indefinitely |
+| **Can you read it?** | no | no | **yes** |
+| Where it works | Claude Code only | every surface | every surface |
+
+### What dejavu does here
+
+Notepad, diary and bookshelf all do different jobs, so they are not replacements for one
+another — you **stack them.** dejavu is what covers the gaps in Claude's own memory and in
+Obsidian: hand it something and it files it into the diary or the bookshelf as
+appropriate, on its own.
+
+### Change 1: you can read it back yourself
+
+When dejavu writes into Obsidian, what it saved becomes a text file — plain text, nothing
+more. **Claude's memory becomes your notes.**
+
+You can open them, search them, link them together, and read them on your phone. The
+uneasy "I have no idea what Claude thinks it knows" feeling goes away — and if something
+was remembered wrongly, you can edit the text.
+
+### Change 2: every surface reaches the same knowledge
+
+There are several ways to reach Claude: Claude Code in the terminal, Claude Desktop chat,
+Cowork, and the Claude Agents built into Xcode. Same Claude, slightly different abilities.
+
+**A vault is just a folder, so any surface that can read files can read it directly.**
+That covers Claude Code in the terminal and Xcode's Claude Agents. But **Claude Desktop
+chat cannot read files at all**, and while Cowork can read Obsidian's data, you have to
+reattach the folder by hand every time you use it.
+
+This is the gap dejavu covers. It is already reachable from all four ways of getting to
+Claude, so if you tell dejavu where the vault is, **dejavu reads and writes the vault on
+Claude's behalf** — and the same notes become available everywhere.
+
+| | Terminal | Xcode | Desktop chat | Cowork |
+| --- | :-: | :-: | :-: | :-: |
+| Obsidian on its own | ✅ | ✅ | ❌ no | △ attach the folder each time |
+| **Through dejavu** | ✅ | ✅ | ✅ | ✅ |
+
+---
+
+## What goes where
+
+With Obsidian connected there are now two places to save things, which raises the
+question of which one to use. The rule is short.
+
+> **dejavu remembers the project. Obsidian remembers you.**
+
+One diary per project; one bookshelf across all of them. Framed that way it is hard to
+get wrong.
+
+In more detail:
+
+| Where | What goes there | Example |
+| --- | --- | --- |
+| `.dejavu/` (inside the project) | **This project only** | "Stopped here", "next: that bug" |
+| `docs/knowledge/` | This project, **shared with the team** | "How we use this API" |
+| Obsidian `Knowledge/` | **True in any project** | "This pattern has a trap in it" |
+| Obsidian `UserInfo/` | **You** | Background, preferences, how you work |
+| Obsidian `Research/` | **What an investigation found** | "A vs B, measured" |
+
+One question settles it:
+
+> **Would this still be true in a different project?**
+> If yes, Obsidian. If it only holds here, dejavu.
+
+### Claude does the sorting
+
+You are not asked to make this call every time. **Claude decides.** When it is unsure,
+it asks you:
+
+```
+Claude:  What we just found looks general rather than specific to this project.
+         Save it to Obsidian as shared knowledge?
+
+         1. yes   2. no   3. always, stop asking   4. never, stop asking
+```
+
+Pick 3 or 4 and it stops asking. You can change your mind later.
+
+---
+
+## What it looks like in use
+
+Here is all of the above as actual conversation — once for someone writing code, once for
+someone who is not.
+
+### If you write code
+
+**Starting the day**
+
+```
+You:     continue from yesterday
+```
+
+> Yesterday you finished Phase 4e of the recognition module split and left Phase 5 for
+> later. The files that changed were `FoodAnalysisService.swift` and `GIService.swift`.
+> Shall we carry on?
+
+**Mid-task, after a fix**
+
+> Fixed. The cause was that `safeAreaInsets` reads as 0 inside `ignoresSafeArea()`.
+>
+> That is not specific to this app — it holds for SwiftUI generally.
+> Save it to Obsidian as shared knowledge?
+
+**Six months later, in a completely different app**
+
+```
+You:     the layout is shifted down here
+```
+
+> You have hit this before. There is a note in Obsidian's `Knowledge/` saying
+> `safeAreaInsets` reads as 0 inside `ignoresSafeArea()`. The same fix should apply.
+
+Knowledge follows you across projects, so **you never run the same investigation twice.**
+What you worked out six months ago reaches the you of today.
+
+**Handing something to the team**
+
+Put a text file in `docs/knowledge/` and git shares it with everyone. dejavu searches it
+just the same, so moving something there changes nothing about how it feels to use.
+
+### If you do not write code
+
+You do not need a project folder at all — just connect a vault.
+
+**If your work is research**
+
+```
+You:     what were the conditions on that grant I looked into last week?
+
+Claude:  It is in Obsidian's Research/. From the 20 July investigation: fewer than 50
+         employees, applications close at the end of September, three documents required.
+```
+
+**If your work is writing**
+
+```
+You:     edit this draft the usual way
+
+Claude:  There are style notes in UserInfo/: short sentences, no noun-ending phrases,
+         always gloss the jargon. Editing along those lines.
+```
+
+The habit is exactly the same as for the code case: **say "remember this"**, and it comes
+back next time you ask. And what comes back is something you can open and read yourself.
+
+---
+
+## Install
+
+There are at most four steps. Work down the list; it takes about ten minutes.
+
+| | Step | Who needs it |
+| --- | --- | --- |
+| 1 | Install dejavu | **everyone** |
+| 2 | Connect Obsidian | optional (recommended) |
+| 3 | Enable it in Claude Desktop | if you use chat or Cowork |
+| 4 | Add it to a project | if you write code |
+
+### 1. Install dejavu
+
+Open Terminal, paste these two lines, and press Enter after each.
 
 ```bash
 brew install alohayos/tap/dejavu
 dejavu init --global
 ```
 
-The second line installs dejavu's instructions into `~/.claude/`. That is the part that
-teaches Claude Code how to use dejavu. Do it once and every project on your machine can
-use it.
+The first installs dejavu itself. The second teaches Claude how to use it. Both are
+one-time; you never need to run them again.
 
-> The shorter alias `deja` works everywhere `dejavu` does. This guide uses `dejavu`.
+> - If you do not have [Homebrew](https://brew.sh), install that first
+> - The shorter alias `deja` works everywhere `dejavu` does
+> - When a newer version comes out, `brew upgrade dejavu` updates it
 
-To move to a newer version later: `brew upgrade dejavu`.
+### 2. Connect Obsidian (optional)
 
----
+Never used Obsidian? It is free, and as written above a vault is just a folder.
 
-## Add it to a project
+First, set Obsidian up:
 
-Run this at the root of a repository — new or existing, in any language.
+1. Download and install it from <https://obsidian.md/download>
+2. Open it and choose **Create new vault**
+3. Give it a name and a location. If you have no preference, `MyVault` in your Documents
+   folder is fine (→ [official guide](https://help.obsidian.md/vault))
 
-```bash
-dejavu init
-```
-
-**That is the last command you need to type.** It creates:
-
-```
-your-project/
-├── .dejavu/                    ← new
-│   ├── knowledge.db            (the database — not tracked by git)
-│   ├── dejavu-triggers.md      (instructions for Claude — tracked by git)
-│   └── config.toml
-├── CLAUDE.md                   ← one line added, importing the instructions
-└── .gitignore                  ← one line added, excluding the database
-```
-
-**It is safe on an existing project.** `dejavu init` does not touch your source code, and
-it only *appends* lines to `CLAUDE.md` and `.gitignore` if they are not already there. Run
-it twice and nothing bad happens.
-
-**If you use Xcode**: `.dejavu/` lives at the repository root, outside `.xcodeproj`, so it
-never ends up in a build. The one thing to avoid is putting it inside an Xcode 16
-**synchronized group** (a "buildable folder"), because that feature adds every file in the
-folder to the target automatically. At the repository root you are safe.
-
-Then start Claude Code as usual:
+Then tell dejavu where it is. Back in Terminal — replace `~/Documents/MyVault` with
+whatever you chose in step 3:
 
 ```bash
-claude
+dejavu obsidian init ~/Documents/MyVault
+dejavu obsidian doctor
 ```
 
----
+The second command, `doctor`, inspects the current state and prints it. If you see the
+vault path and how dejavu intends to write to it, it worked.
 
-## Scopes: what Claude remembers, and where
+This creates three folders in the vault — `Knowledge/`, `UserInfo/` and `Research/` —
+unless they already exist. **Nothing else in the vault is touched.**
 
-```bash
-dejavu init --global
-dejavu init
-```
+#### Whether the vault is on this Mac or in the cloud changes how it writes
 
-What is the difference between these two? That difference is the **scope**.
+| Vault location | Readable on your phone | How dejavu writes |
+| --- | :-: | --- |
+| A folder on this Mac | no | creates, appends, **rewrites** |
+| iCloud / Dropbox / Google Drive / Obsidian Sync | yes | creates and appends only |
 
-Things you want remembered everywhere on this machine are stored as *your* memory (the
-**user** scope). Things that only make sense inside one repository are stored as that
-project's memory (the **project** scope).
+It works out which case applies on its own, and `dejavu obsidian doctor` will tell you
+which — and why — at any time.
 
-### "Remember this for every project"
+### 3. Enable it in Claude Desktop
 
-The user scope is for things that are about **you**, not about this repository. There is
-no command or flag to learn. Words like *everywhere*, *always*, or *for every project* are
-enough — Claude picks the user scope on its own.
-
-```
-You:     I always squash-merge. Remember that for every project.
-
-Claude:  Saved to the user scope. I will remember it in your other projects too.
-```
-
-Good candidates for the user scope:
-
-- **Preferences and working style** — "write PR bodies as bullet points", "commit messages
-  in Japanese"
-- **Quirks of your setup** — "I use the Homebrew Python, not the system one"
-- **Context that crosses projects** — a note you want to carry into a different repository
-
-There is one test when you are unsure: **would this still be true in another repository?**
-If yes, it is user scope. If it is only true here, it is project scope.
-
-- **project** — stored in `.dejavu/` inside the repository. Most knowledge lives here
-- **user** — stored in `~/.config/dejavu/` and readable from every project. Personal notes
-  and cross-project context
-
----
-
-## A day with dejavu
-
-### First thing: "let's pick up where we left off"
-
-```
-You:     continue from yesterday
-
-Claude:  Yesterday you finished the CoreData migration and merged PR #23.
-         The note says the next step is writing tests for the rollback path,
-         and points at Sources/Store/Migration.swift:142.
-
-         Shall I start there?
-```
-
-Claude has read **the handoff note you left yesterday**: what was finished, what comes
-next, which file and which line to look at. No re-reading. None of Claude's usual "let me
-get up to speed first".
-
-### During the day: Claude uses it by itself
-
-Claude remembers and recalls on its own. There is nothing for you to manage.
-
-- **Before** it reads an unfamiliar module, it searches the knowledge base
-- If it has looked into this before, it carries on from there
-- When it works something out, it saves it
-- When it makes a design decision, it records the decision **and the options it rejected** —
-  the part that is normally lost forever
-
-You will see Claude run a `dejavu` command now and then in the middle of its work. That is
-normal. Think "ah, it is remembering something" and leave it be.
-
-### Side tasks: "not now — remember it for later"
-
-```
-You:     That AppDelegate warning bugs me, but not now. Remember it for later.
-
-Claude:  Saved as a plan. Back to the tests.
-```
-
-**This may be the most useful habit of all.** Something catches your eye mid-task. Stopping
-to fix it derails the work you were doing; ignoring it means forgetting it. Just say
-"remember it" and it is captured, with no interruption.
-
-Later, say "show me the plans you saved" and Claude lists them so you can pick one up.
-
-### End of day: "save what we did today"
-
-```
-You:     save what we did today
-
-Claude:  Saved: "NEXT: write the rollback-path tests"
-```
-
-**The only habit you need to build is saying "save what we did today" when you finish
-work.** One sentence at the end of a session, and the next one starts at full speed.
-Forget it and dejavu takes no note — tomorrow starts from zero.
-
-### Any time: "what have I been up to?"
-
-```
-You:     what was I working on this week?
-
-Claude:  Wednesday
-           - Merged the CoreData migration (PR #23)
-           - Decided against SwiftData; the reason is recorded
-         Tuesday
-           - Investigated the rollback crash
-```
-
-Handy as raw material for a status report, and for the moment you come back after a few
-days off and cannot remember where you were.
-
----
-
-## The four things you actually say
-
-Everything above comes down to these four phrases. There are no commands to memorise.
-
-| Say this | Claude does this |
-| --- | --- |
-| **"continue from yesterday"** | Reads the last handoff note and resumes |
-| **"save what we did today"** | Writes a handoff note for the next session |
-| **"remember that for later"** | Records a side task without breaking your focus |
-| **"what have I been working on?"** | Summarises recent activity |
-
----
-
-## What gets stored
-
-Knowledge is filed under one of six categories. Claude picks the right one, so you will
-rarely think about this.
-
-| Category | What it holds | Example |
-| --- | --- | --- |
-| `context` | Session handoff notes | "Done: migration merged. Next: rollback tests." |
-| `plan` | Work put off until later | "Fix the AppDelegate warning" |
-| `decision` | Design decisions **and rejected options** | "Chose UIKit over SwiftUI because…" |
-| `feature` | How a piece of code works | "`Migration.swift` runs in three phases…" |
-| `convention` | Team rules | "Every view model ends in `ViewModel`" |
-| `note` | Everything else | |
-
----
-
-## Credentials are never stored
-
-`dejavu` refuses any text containing something that looks like an API key, a token, or a
-private key. If Claude ever tries to save a snippet with a secret in it, it is stopped
-right there.
-
----
-
-## Working with a team
-
-**Today, dejavu is a personal tool.** The knowledge base is a database that is not tracked
-by git, so what Claude learns stays on your machine. Nothing you store leaks into a pull
-request, and nothing a teammate stores reaches you.
-
-Only the instructions file (`.dejavu/dejavu-triggers.md`) is committed, so a teammate who
-clones the repository gets a Claude that knows how to *use* dejavu — with an empty
-knowledge base of their own.
-
-Sharing knowledge across a team is a design that exists but has not been built: exporting
-selected entries to `.dejavu/*.md`, tracked by git and reviewed in pull requests like any
-other file. See [BACKLOG.md](docs/BACKLOG.md).
-
----
-
-## When knowledge goes stale
-
-Code changes. Notes about the code do not. dejavu is built on that assumption.
-
-Every entry records when it was last **checked against the real code**. Once that gets old
-(7 days for research caches, 30 days for design decisions — adjustable in
-`.dejavu/config.toml`), search results come back marked:
-
-```
-⚠ [a3f01c8b] Migration runs in three phases (feature) [STALE: 12 days since last check]
-```
-
-**A stale entry is not dropped from the results.** Old knowledge is still a useful clue,
-and throwing it away would do more harm than flagging it. Claude is instructed to check a
-stale entry against the current code before relying on it, then either keep it as is, fix
-it, or discard it and investigate again.
-
-When you want a spring clean, say "**review the knowledge that has gone stale**" and Claude
-will go through them one by one against the current code, sorting out what to fix, what to
-throw away, and what to leave alone.
-
----
-
-## Claude Desktop and Cowork
-
-Everything above assumes Claude can run shell commands next to the database — true in the
-terminal and in Xcode's built-in agent, and **not** true in Claude Desktop or Cowork. Their
-shells run in a sandbox that cannot see `~/.config/dejavu/` at all.
-
-For those, register dejavu as an MCP server:
+To use dejavu from chat or Cowork, run:
 
 ```bash
 dejavu install-mcp
 ```
 
-Restart the app. Claude now has `search_knowledge`, `resume_knowledge`, `recent_knowledge`
-and the rest as tools, reading the same database as your terminal.
+Then quit Claude Desktop and open it again. Chat and Cowork can now reach dejavu.
 
-**One difference: you have to say which project.** An MCP server is launched by the desktop
-app and has no working directory of its own, so it cannot guess which repository you mean.
-Name it and Claude will pass the path:
+### 4. Add it to a project folder
 
+In the project folder (the repository), run:
+
+```bash
+cd ~/your-project
+dejavu init
 ```
-You:     what was I working on in MyApp yesterday?
-```
 
-With no project named, only your **user scope** is used — personal notes and cross-project
-context. In practice that is most of what you want from Claude Desktop anyway.
+It creates a `.dejavu/` folder and appends a single line each to `CLAUDE.md` and
+`.gitignore`. **It never touches your source code.** It is safe on a project already in
+progress, and safe to run twice by accident.
+
+Running it in a project is what creates that project's diary.
 
 ---
 
-## Command reference
+## Using it from each surface
 
-Claude runs most of these for you, so you will rarely type one yourself — but here they
-are for when you need them.
+Once installed, every surface reaches the same knowledge. They differ slightly in how,
+so here is each in turn.
 
-| Command | Description |
-| --- | --- |
-| `dejavu init` | Set up the current project |
-| `dejavu init --global` | Install the instructions for every project (once) |
-| `dejavu resume` | Show the last handoff note |
-| `dejavu recent` | Show recent work, grouped by day (default: the last 2 days) |
-| `dejavu search "<query>"` | Search the knowledge base |
-| `dejavu list --stale` | List entries that need reviewing |
-| `dejavu show <uid>` | Print an entry in full |
-| `dejavu stats` | See how much has piled up |
-| `dejavu rm <uid>` | Delete an entry |
-| `dejavu install-mcp` | Register the MCP server with Claude Desktop / Cowork |
+### Claude Desktop — chat
 
-Add `--help` to any of them for the full set of options.
+Chat cannot read files on your machine, but with step 3 done, dejavu reads and writes on
+its behalf.
+
+```
+You:     write a 200-word speaker bio from my profile
+
+Claude:  (reads UserInfo/Profile.md in Obsidian)
+         In 1998, developed a Japanese input system for the Apple Newton MessagePad. …
+```
+
+```
+You:     remember that approach from now on, everywhere
+
+Claude:  Saved to Obsidian's Knowledge/. It will come back in other chats and in Cowork.
+```
+
+> **Say which project you mean** — "about Project A, could you write up the minutes"
+> and so on. Chat and Cowork have no way of knowing which folder you are working in.
+> Without a project named, only your personal knowledge and the vault are used.
+
+### Claude Desktop — Cowork
+
+Cowork uses the same mechanism as chat, which means **you do not have to attach the
+Obsidian folder to Cowork by hand.**
+
+```
+You:     where did this project get to?
+
+Claude:  (checks the project's records, then Research/ in Obsidian)
+         Phase 4e is complete and Phase 5 was deferred.
+         There is also a related measurement from 17 July.
+```
+
+### Claude Desktop — Code
+
+It can read files on your machine directly, so it behaves exactly like Claude Code in the
+terminal. Nothing extra to configure.
+
+### Claude Code in the terminal
+
+Change to the project folder and start it as usual:
+
+```bash
+cd ~/your-project
+claude
+```
+
+Then just talk. Saving and recalling are Claude's judgement calls. The only things worth
+saying deliberately are the four phrases listed earlier.
+
+### Xcode's Claude Agents
+
+The Claude Agent built into Xcode 26 and later reads files just like the terminal does, so
+it works as-is. The project's `CLAUDE.md` is picked up automatically, so as long as step 4
+is done there is nothing else to configure.
+
+> Occasionally you may see `dejavu: command not found` — Xcode launches the agent in an
+> environment where dejavu is not on the path. The fix is in [REFERENCE.md](docs/REFERENCE.md).
+
+---
+
+## If you already use Obsidian
+
+If you already keep a vault, the question on your mind is whether dejavu will make a mess
+of it. There are three things worth explaining, in turn.
+
+### 1. Your existing notes are never modified
+
+**Not one note you wrote will be changed.**
+
+Every note dejavu creates carries `source: dejavu` at the top of the file. **A note
+without that marker is read-only to dejavu, permanently** — no appends, no rewrites.
+
+If dejavu is ever asked to write to one, it stops with an error:
+
+```
+error: my-handwritten-note.md was not written by dejavu
+       (no `source: dejavu` in its frontmatter).
+       Notes you wrote by hand are never modified.
+```
+
+### 2. Your folder structure stays yours
+
+`Knowledge/` starts empty. Build subfolders however you like — PARA, Zettelkasten,
+Johnny.Decimal, whatever you already use.
+
+dejavu **files notes into folders that already exist and never creates one of its own.**
+Classification is also written into the top of each note, so rearranging folders later
+does not break search or grouping.
+
+### 3. You choose what it can see
+
+Folders you do not list are not read at all. The default is just `Knowledge/`, `UserInfo/`
+and `Research/`, so a personal journal or your travel notes will not surface mid-task.
+
+To match names you already use:
+
+```bash
+dejavu config userinfo_dir Profile     # use Profile/ instead of UserInfo/
+```
 
 ---
 
 ## FAQ
 
-**Do I have to remember to save things?**  
-Claude saves as it works, following the instructions. The one habit worth building is
-saying "save what we did today" before you stop. That is what makes "continue from
-yesterday" work the next morning.
+**Do I have to remember to save things?**
+Claude saves as it works, so mostly no. The one habit worth building is saying "save what
+we did today" before you stop. That is what makes "continue from yesterday" work.
 
-**Does my code get sent anywhere?**  
-No. dejavu is a local database with no network access at all.
+**Does anything get sent anywhere?**
+No. dejavu has no networking code in it at all, and needs no account.
 
-**Does it slow Claude down?**  
-The opposite. A search finishes in tens of milliseconds and saves Claude from reading
-several files. The instructions loaded on every turn are only about 30 lines.
+**Does it slow Claude down?**
+It speeds things up. A search finishes in tens of milliseconds and saves Claude from
+re-reading several files. The instructions loaded each turn are about 40 lines.
 
-**What if Claude saves something wrong?**  
-Tell it: "that entry is wrong, fix it." Or delete it with `dejavu rm <uid>` — the UID is
-the short code in brackets in every result.
+**What if Claude remembers something wrong?**
+Tell it: "that note is wrong, fix it." To delete one outright, `dejavu rm <uid>` — the uid
+is the short code in brackets in every search result.
 
-**Does it work in Japanese?**  
-Yes. Full-text search is designed so that **two-character Japanese words like 検索 or 認証**
-— short enough that most search engines miss them — still match reliably.
+**What if the project and Obsidian disagree?**
+Both are shown, and you are asked which to adopt. dejavu never decides silently: a wrong
+answer written into the vault would follow you into every other project.
 
-**Can I use it without Claude Code?**  
-You can. It is an ordinary CLI, so `dejavu add` and `dejavu search` work by hand. But it is
-built for an agent to drive, and that is where it earns its keep.
+**Does it work in Japanese?**
+Yes. Two-character Japanese words like 検索 and 認証 — short enough that most search
+mechanisms miss them — are matched reliably by design.
 
-**How do I remove it from a project?**  
-Delete `.dejavu/` and remove the one imported line from `CLAUDE.md`. Nothing else was
-touched.
+**Is Obsidian required?**
+No. dejavu is complete on its own. Adding Obsidian lets you read the knowledge back
+yourself, makes it reachable from chat and Cowork, and lets you keep far more of it.
+
+**Can people who do not program use it?**
+Yes. Steps 1 and 2 are enough (plus 3 if you want chat) to run it as your personal
+knowledge store. Step 4 is not needed.
+
+**Claude Code already has auto memory (MEMORY.md) — why this too?**
+They do different jobs and work together. Auto memory loads every session but is capped at
+its first 200 lines and has no search. dejavu stays out of the context and searches on
+demand, so it keeps working as the knowledge grows. See
+[How this differs from Claude's own memory](#how-this-differs-from-claudes-own-memory).
+
+**Can I use it without Claude Code?**
+You can. It is an ordinary CLI command, so `dejavu add` and `dejavu search` work by hand.
+It is built for an agent to drive, though, and that is where it earns its keep.
+
+**How do I stop using it?**
+Delete `.dejavu/` from the project and remove the one line added to `CLAUDE.md`. Nothing
+was left anywhere else. Vault notes are plain text files and simply stay where they are.
+
+---
+
+## Going deeper
+
+This README covers what you need to get started. The finer detail lives in separate files.
+
+- **[REFERENCE.md](docs/REFERENCE.md)** — every command, config options, how the stores
+  work, MCP tools, categories, staleness, troubleshooting
+- [BACKLOG.md](docs/BACKLOG.md) — what is deliberately deferred
+
+---
+
+MIT License

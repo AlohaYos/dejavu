@@ -89,6 +89,7 @@ def test_tools_list_is_well_formed(project):
     assert names == {
         "search_knowledge", "resume_knowledge", "recent_knowledge",
         "add_knowledge", "update_knowledge", "get_knowledge",
+        "obsidian_status", "add_obsidian_knowledge", "add_research",
     }
     for tool in tools:
         assert tool["description"]

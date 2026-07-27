@@ -14,3 +14,5 @@ build/
 # .dejavu/*.md, which stays tracked.
 .dejavu/knowledge.db
 .dejavu/knowledge.db-*
+docs/DEVELOPING.md
+docs/RELEASING*.md

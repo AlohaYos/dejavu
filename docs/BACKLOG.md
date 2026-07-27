@@ -80,14 +80,57 @@ Source: https://fatbobman.com/en/posts/xcode-263-claude/ (third-party; verify be
 
 ---
 
-## Markdown export / sync — `proposed`
+## Obsidian integration — `done` (v0.4.0)
+
+Shipped. `src/dejavu/obsidian.py`, set up with `dejavu obsidian init <vault>`.
+
+Two decisions are worth keeping, because the code does not explain itself:
+
+**The vault index is a second database built from `store.SCHEMA` verbatim.** Rows land in
+`entries` with `storage='obsidian'`, `source_path` holding the vault-relative path and
+`source_hash` holding `mtime:size`. That is the whole reason `search.py` needed no changes:
+the rows are shaped like the ones it already reads, so the trigram tier, the keyword tier
+and — critically — the LIKE fallback that makes two-character Japanese search work all
+apply to vault notes for free. Any future scheme that "just indexes the vault separately"
+would have to reimplement that tier stack, and the copy would drift.
+
+A *separate file* (`~/.config/dejavu/obsidian.db`), not the user-scope database, because
+hundreds of vault notes in `entries` would drown `list`, `recent` and `resume` — the
+commands that answer "what have I been working on", which the vault has no part in.
+It also makes the index disposable: delete it and `obsidian sync` rebuilds it.
+
+**Nothing without `source: dejavu` in its frontmatter is ever modified.** Users arrive
+with vaults that already hold years of notes; the integration is only adoptable if
+existing notes are provably untouchable. Frontmatter edits splice single lines rather than
+re-serialising the block, so keys dejavu knows nothing about (an `autolink:` list written
+by an embedding script, say) survive.
+
+**Still open:** `dejavu obsidian relate` — embedding-based links between notes. Needs
+Ollama, therefore a network call to localhost and a model download, therefore it cannot
+live in the core. Ship it as a separate command that fails with an explanation when Ollama
+is absent, and never let the README imply the core needs it.
+
+**Also open:** migrating what is already stored. The user scope holds a handful of entries
+that are really user-level knowledge, and project databases hold general findings
+(`ignoresSafeArea` behaviour and the like) that belong in `Knowledge/`. There is no
+`dejavu promote --to-vault` yet; the entries have to be moved by hand.
+
+---
+
+## Markdown export / sync — `proposed` (the reading half landed in v0.4.0)
 
 The `shared` half of the two-layer design (Markdown is the source of truth, SQLite is a
-rebuildable index) is designed but not implemented. `storage`, `source_path` and
-`source_hash` columns already exist in the schema and are currently unused.
+rebuildable index). **Reading now works**: `docs/knowledge/*.md` is indexed into
+`.dejavu/shared.db` by the same `obsidian.index_markdown_tree` that handles the vault, and
+those notes turn up in `dejavu search` tagged `[shared]`. `storage`, `source_path` and
+`source_hash` are no longer unused — that is exactly what they hold.
+
+Writing is still missing. Note that a team-shared note is written *by hand* today, into a
+directory that git already tracks, which is most of what this item was for. What remains
+is the DB → Markdown direction:
 
 - `dejavu export [<uid>]` — DB → `.dejavu/<category>/<slug>-<uid>.md`, flip `storage` to `shared`
-- `dejavu sync` — Markdown → DB, driven by a file-hash diff against `source_hash`
+- ~~`dejavu sync` — Markdown → DB~~ — done, as `obsidian.index_markdown_tree`
 - Automatic sync after `git pull`: compare hashes on any read command, no manual `sync`
 - `dejavu promote <uid>` — shorthand for "this local note is worth sharing"
 - ADR support: `status` transitions and bidirectional `supersede` links (the `links` table

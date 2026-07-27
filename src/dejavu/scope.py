@@ -10,11 +10,13 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 DEJAVU_DIR = ".dejavu"
 DB_NAME = "knowledge.db"
+OBSIDIAN_DB_NAME = "obsidian.db"
+SHARED_DB_NAME = "shared.db"
 CONFIG_NAME = "config.toml"
 TRIGGERS_NAME = "dejavu-triggers.md"
 
@@ -120,25 +122,54 @@ def resolve_db_root(root: Path, start: Path | None = None) -> Path:
 
 
 _SECTION = re.compile(r"^\[(?P<name>[^\]]+)\]\s*$")
-_INT_KV = re.compile(r"^(?P<key>[A-Za-z_][\w-]*)\s*=\s*(?P<value>\d+)\s*$")
+_KV = re.compile(r"^(?P<key>[A-Za-z_][\w-]*)\s*=\s*(?P<value>.+?)\s*$")
+
+ConfigValue = str | int | list[str]
 
 
-def _load_stale_days(config_file: Path | None) -> dict[str, int]:
-    """Read [stale_days] from config.toml.
+def _parse_value(raw: str) -> ConfigValue | None:
+    """Parse the right-hand side of a config line.
 
-    Only a handful of integer keys are needed, so we avoid tomllib (Python 3.11+).
-    That keeps requires-python low and adds no dependency.
-    A malformed config falls back to defaults: failing to open the knowledge base
-    would be worse than silently ignoring a bad setting.
+    Deliberately tiny: quoted strings, string arrays, and integers. That is the whole
+    vocabulary dejavu's config needs, and it is why tomllib (Python 3.11+) is not
+    imported here — requires-python stays at 3.10 and the dependency count stays at zero.
     """
-    days = {cat: d for cat, (_, d) in CATEGORIES.items()}
-    if config_file is None or not config_file.exists():
-        return days
+    if not raw:
+        return None
+    if raw[0] == '"' and raw.endswith('"') and len(raw) >= 2:
+        return raw[1:-1]
+    if raw[0] == "'" and raw.endswith("'") and len(raw) >= 2:
+        return raw[1:-1]
+    if raw[0] == "[" and raw.endswith("]"):
+        inner = raw[1:-1].strip()
+        if not inner:
+            return []
+        items: list[str] = []
+        for chunk in inner.split(","):
+            item = chunk.strip()
+            if len(item) >= 2 and item[0] in "\"'" and item[-1] == item[0]:
+                item = item[1:-1]
+            if item:
+                items.append(item)
+        return items
+    if raw.isdigit():
+        return int(raw)
+    return raw
 
+
+def load_config(config_file: Path | None) -> dict[str, dict[str, ConfigValue]]:
+    """Read a config.toml into {section: {key: value}}.
+
+    A malformed config yields whatever parsed cleanly rather than raising: failing to
+    open the knowledge base would be worse than silently ignoring a bad setting.
+    """
+    data: dict[str, dict[str, ConfigValue]] = {}
+    if config_file is None or not config_file.exists():
+        return data
     try:
         text = config_file.read_text(encoding="utf-8")
     except OSError:
-        return days
+        return data
 
     section = ""
     for raw in text.splitlines():
@@ -147,14 +178,167 @@ def _load_stale_days(config_file: Path | None) -> dict[str, int]:
             continue
         if (m := _SECTION.match(line)) is not None:
             section = m.group("name")
+            data.setdefault(section, {})
             continue
-        if section != "stale_days":
+        if not section:
             continue
-        if (m := _INT_KV.match(line)) is not None:
-            key, value = m.group("key"), int(m.group("value"))
-            if key in days and value > 0:
-                days[key] = value
+        if (m := _KV.match(line)) is not None:
+            value = _parse_value(m.group("value"))
+            if value is not None:
+                data.setdefault(section, {})[m.group("key")] = value
+    return data
+
+
+def _load_stale_days(config_file: Path | None) -> dict[str, int]:
+    """Read [stale_days] from config.toml."""
+    days = {cat: d for cat, (_, d) in CATEGORIES.items()}
+    for key, value in load_config(config_file).get("stale_days", {}).items():
+        if key in days and isinstance(value, int) and value > 0:
+            days[key] = value
     return days
+
+
+def set_config_value(config_file: Path, section: str, key: str, value: str) -> None:
+    """Write one key back, line by line, leaving every comment and blank line intact.
+
+    Regenerating the file from the parsed dict would silently delete the explanatory
+    comments shipped in assets/config.toml — which are most of that file's value.
+    """
+    lines = config_file.read_text(encoding="utf-8").splitlines() if config_file.exists() else []
+    rendered = f'{key} = "{value}"'
+
+    in_section = False
+    section_end = -1
+    for i, raw in enumerate(lines):
+        stripped = raw.split("#", 1)[0].strip()
+        if (m := _SECTION.match(stripped)) is not None:
+            if in_section:
+                break
+            in_section = m.group("name") == section
+            if in_section:
+                section_end = i
+            continue
+        if not in_section:
+            continue
+        if stripped:
+            # Blank and comment-only lines are skipped so a new key lands directly after
+            # the last real setting, not after the blank line that separates sections.
+            section_end = i
+        if (m := _KV.match(stripped)) is not None and m.group("key") == key:
+            lines[i] = rendered
+            config_file.parent.mkdir(parents=True, exist_ok=True)
+            config_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            return
+
+    if in_section or section_end >= 0:
+        lines.insert(section_end + 1, rendered)
+    else:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.extend([f"[{section}]", rendered])
+
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def user_config_path() -> Path:
+    """Where [obsidian] lives. A vault is a property of the machine, not of a repository."""
+    return user_home() / CONFIG_NAME
+
+
+# Markdown files on disk are never out of date with themselves, so index scopes must not
+# report staleness. Every category is listed explicitly because Entry.stale_days falls
+# back to 14 for keys this dict does not contain.
+NEVER_STALE = {cat: 36500 for cat in CATEGORIES}
+
+
+@dataclass(frozen=True)
+class ObsidianConfig:
+    vault: Path | None
+    include: list[str]
+    knowledge_dir: str
+    userinfo_dir: str
+    research_dir: str
+    write_mode: str  # auto | full | append-only
+    research: str  # all | findings | manual
+    promote: str  # ask | always | never
+
+    @property
+    def enabled(self) -> bool:
+        return self.vault is not None
+
+
+OBSIDIAN_DEFAULTS: dict[str, str] = {
+    "knowledge_dir": "Knowledge",
+    "userinfo_dir": "UserInfo",
+    "research_dir": "Research",
+    "write_mode": "auto",
+    "research": "findings",
+    "promote": "ask",
+}
+OBSIDIAN_CHOICES: dict[str, tuple[str, ...]] = {
+    "write_mode": ("auto", "full", "append-only"),
+    "research": ("all", "findings", "manual"),
+    "promote": ("ask", "always", "never"),
+}
+
+
+def obsidian_config(config_file: Path | None = None) -> ObsidianConfig:
+    section = load_config(config_file or user_config_path()).get("obsidian", {})
+
+    raw_vault = section.get("vault")
+    vault = Path(str(raw_vault)).expanduser() if isinstance(raw_vault, str) and raw_vault else None
+
+    raw_include = section.get("include")
+    include = [str(x) for x in raw_include] if isinstance(raw_include, list) else []
+
+    def pick(key: str) -> str:
+        value = section.get(key)
+        text = str(value) if isinstance(value, str) and value else OBSIDIAN_DEFAULTS[key]
+        allowed = OBSIDIAN_CHOICES.get(key)
+        return text if allowed is None or text in allowed else OBSIDIAN_DEFAULTS[key]
+
+    cfg = ObsidianConfig(
+        vault=vault,
+        include=include,
+        knowledge_dir=pick("knowledge_dir"),
+        userinfo_dir=pick("userinfo_dir"),
+        research_dir=pick("research_dir"),
+        write_mode=pick("write_mode"),
+        research=pick("research"),
+        promote=pick("promote"),
+    )
+    if not cfg.include:
+        cfg = replace(
+            cfg, include=[cfg.knowledge_dir, cfg.userinfo_dir, cfg.research_dir]
+        )
+    return cfg
+
+
+def obsidian_scope() -> Scope:
+    """Read-only index of the Obsidian vault. A separate file from knowledge.db.
+
+    Mixing hundreds of vault notes into knowledge.db would drown `list`, `recent` and
+    `resume`, which answer "what have I been working on" — a question the vault has no
+    part in. Keeping it separate also makes the index disposable: delete it and
+    `dejavu obsidian sync` rebuilds it.
+    """
+    return Scope(
+        name="obsidian",
+        db_path=user_home() / OBSIDIAN_DB_NAME,
+        root=None,
+        stale_days=NEVER_STALE,
+    )
+
+
+def shared_scope(root: Path) -> Scope:
+    """Read-only index of <repo>/docs/knowledge/*.md — the team-shared, git-tracked layer."""
+    return Scope(
+        name="shared",
+        db_path=resolve_db_root(root) / DEJAVU_DIR / SHARED_DB_NAME,
+        root=root,
+        stale_days=NEVER_STALE,
+    )
 
 
 def user_scope() -> Scope:

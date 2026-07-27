@@ -37,11 +37,13 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import __version__, preflight, safety
+from . import __version__, obsidian, preflight, safety
 from . import scope as scope_mod
+from .cli import CONFLICT_INSTRUCTION, find_conflict
 from .scope import CATEGORIES, STATUSES, Scope
 from .search import search as run_search
 from .store import (
@@ -115,6 +117,10 @@ def _entry_json(entry, scope: Scope, *, full: bool) -> dict:
         # claims to be a project entry, even when it was written to the user scope.
         # Reporting the wrong scope back to the model would be worse than useless.
         "scope": scope.name,
+        # Which store answered: project / user / shared (the repo's docs) / obsidian
+        # (the user's vault). The model needs this to weigh two hits against each other.
+        "source": scope.name,
+        "file": entry.source_path,
         "updated_at": entry.updated_at,
         "age": entry.age_phrase,
         "stale_days": entry.stale_days(scope.stale_days),
@@ -249,6 +255,95 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
+OBSIDIAN_TOOLS: list[dict[str, Any]] = [
+    {
+        "name": "obsidian_status",
+        "title": "Is an Obsidian vault connected?",
+        "description": (
+            "Check before writing user-level knowledge. Reports whether a vault is "
+            "configured, which folders it holds, and the write mode: `append-only` means "
+            "the vault syncs to other devices, so notes can be created and appended to but "
+            "never rewritten. Also reports the `research` and `promote` policies the user "
+            "has chosen, which govern how eagerly you should be saving to the vault."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "add_obsidian_knowledge",
+        "title": "Save knowledge to the user's vault",
+        "description": (
+            "Save knowledge that outlives this repository — a language or framework "
+            "pitfall, a tool's real behaviour, the user's own working style. The test is "
+            "'would this still be true in a different repository?'. If yes, it belongs "
+            "here; if no, use add_knowledge with the project scope instead.\n"
+            "Notes land in the vault's Knowledge folder, and in a subfolder only when the "
+            "user has already created one by that name — never invent folders. An existing "
+            "note with the same title is appended to rather than duplicated. Notes the "
+            "user wrote by hand are never modified."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "One-line summary."},
+                "body": {"type": "string"},
+                "category": {
+                    "type": "string",
+                    "description": "Subfolder of Knowledge/, used only if it already exists.",
+                },
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "project": {"type": "string", "description": "Where this was learned."},
+                "project_path": _PROJECT_PATH_SCHEMA,
+            },
+            "required": ["title"],
+        },
+    },
+    {
+        "name": "add_research",
+        "title": "Record an investigation in the vault",
+        "description": (
+            "File what an investigation found, so the same ground is not covered twice: "
+            "measurements, API behaviour that the documentation does not state, options "
+            "compared and rejected. Filed under Research/<project>/<date>-<title>.\n"
+            "Respect the user's `research` policy from obsidian_status: `findings` (the "
+            "default) means save reusable discoveries but not routine session state, "
+            "`all` means mirror handoff notes here too, `manual` means only when asked."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "body": {"type": "string"},
+                "project": {"type": "string", "description": "Default: the project_path name."},
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "project_path": _PROJECT_PATH_SCHEMA,
+            },
+            "required": ["title"],
+        },
+    },
+]
+
+TOOLS.extend(OBSIDIAN_TOOLS)
+
+
+def _vault():
+    cfg = scope_mod.obsidian_config()
+    if not cfg.enabled or cfg.vault is None or not cfg.vault.is_dir():
+        raise ValueError(
+            "No Obsidian vault is configured. Ask the user to run "
+            "`dejavu obsidian init <path-to-vault>` in a terminal."
+        )
+    return cfg.vault, cfg
+
+
+def _refuse_secrets(title: str, body: str) -> None:
+    """The same detector the CLI runs. Reimplementing it here would let one path leak."""
+    found = safety.find_secrets(f"{title}\n{body}")
+    if found:
+        raise ValueError(
+            "Possible secret detected: " + ", ".join(found) + ". Never store credentials."
+        )
+
+
 def _find(uid: str, scopes: list[Scope]):
     for scope in scopes:
         if not scope.db_path.exists():
@@ -268,16 +363,92 @@ def call_tool(name: str, args: dict[str, Any]) -> dict:
     project_path = args.get("project_path")
 
     if name == "search_knowledge":
-        scopes = _scopes_for(project_path)
+        scopes = obsidian.with_indexes(
+            _scopes_for(project_path),
+            Path(project_path).expanduser() if project_path else None,
+        )
         hits = run_search(
             scopes,
             args["query"],
             category=args.get("category"),
             limit=int(args.get("limit", 10)),
         )
-        return {
+        payload = {
             "results": [_entry_json(hit.entry, sc, full=False) for hit, sc in hits],
             "count": len(hits),
+        }
+        conflict = find_conflict(hits)
+        if conflict:
+            payload["conflict_candidates"] = conflict
+            payload["conflict_instruction"] = CONFLICT_INSTRUCTION
+        return payload
+
+    if name == "add_obsidian_knowledge":
+        vault, cfg = _vault()
+        body = args.get("body", "")
+        _refuse_secrets(args["title"], body)
+        base = vault / cfg.knowledge_dir
+        mode, _ = obsidian.effective_write_mode(vault, cfg.write_mode)
+        existing = obsidian.find_note(base, args["title"])
+        try:
+            if existing is not None:
+                obsidian.append_to_note(existing, body)
+                path, action = existing, "appended"
+            else:
+                path = obsidian.create_note(
+                    obsidian._category_dir(base, args.get("category")),
+                    args["title"],
+                    body,
+                    category=args.get("category"),
+                    tags=normalize_keywords(args.get("tags")),
+                    project=args.get("project"),
+                )
+                action = "created"
+        except obsidian.WriteRefused as exc:
+            raise ValueError(str(exc)) from exc
+        obsidian.sync_vault(cfg, force=True)
+        return {"file": path.relative_to(vault).as_posix(), "action": action, "write_mode": mode}
+
+    if name == "add_research":
+        vault, cfg = _vault()
+        body = args.get("body", "")
+        _refuse_secrets(args["title"], body)
+        project = args.get("project") or (Path(project_path).name if project_path else None)
+        if not project:
+            raise ValueError("Pass `project`, or `project_path`, so the note can be filed.")
+        day = datetime.now().astimezone().strftime("%Y-%m-%d")
+        path = obsidian.create_note(
+            vault / cfg.research_dir / project,
+            args["title"],
+            body,
+            tags=normalize_keywords(args.get("tags")),
+            project=project,
+            filename=f"{day}-{obsidian.slugify(args['title'])}",
+        )
+        obsidian.sync_vault(cfg, force=True)
+        return {"file": path.relative_to(vault).as_posix(), "project": project}
+
+    if name == "obsidian_status":
+        cfg = scope_mod.obsidian_config()
+        if not cfg.enabled or cfg.vault is None:
+            return {
+                "configured": False,
+                "hint": (
+                    "No vault is set up. Ask the user to run `dejavu obsidian init "
+                    "<path-to-vault>` in a terminal. Until then, user-level knowledge has "
+                    "nowhere to go and should stay in the project scope."
+                ),
+            }
+        mode, reason = obsidian.effective_write_mode(cfg.vault, cfg.write_mode)
+        scope = scope_mod.obsidian_scope()
+        return {
+            "configured": True,
+            "vault": str(cfg.vault),
+            "write_mode": mode,
+            "reason": reason,
+            "by_folder": {f: obsidian.count_in_folder(scope, f) for f in cfg.include},
+            "research": cfg.research,
+            "promote": cfg.promote,
         }
 
     if name == "resume_knowledge":

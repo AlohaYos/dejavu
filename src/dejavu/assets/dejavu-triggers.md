@@ -24,17 +24,14 @@ This project has a local knowledge base, `dejavu`. These are the triggers.
   store **what is done / what to do next / concrete artefacts (paths, function names)**
   under `--category context`
 
-## Which scope
+## Where it goes
 
-Default is the project scope. Add `--scope user` when the knowledge is about the *user*
-rather than *this repository* — it then follows them into every project:
+The project scope by default. Knowledge that would still be true in a *different*
+repository — a language pitfall, a tool's real behaviour, the user's own working style —
+belongs to the user: `dejavu obsidian add "<title>" --body -` when a vault is set up,
+otherwise `dejavu add --scope user`. Commands say what to do next when it matters.
 
-- personal preferences and working style ("always squash-merge", "write PR bodies as
-  bullet points")
-- facts about their machine or setup ("uses the Homebrew Python, not the system one")
-- anything they say they want remembered **everywhere**, **always**, or **in general**
-
-If it would be wrong advice in a different repository, it belongs in the project scope.
+## How to write entries
 
 - **Dense, not long.** Skip the narrative; keep the reasoning behind a decision, the
   options rejected, and the paths and function names that are expensive to rediscover

@@ -96,6 +96,9 @@ class Entry:
     updated_at: str
     checked_at: str
     scope: str = "project"
+    # Set for rows that mirror a file on disk (the Obsidian and docs/knowledge indexes).
+    # Without it a search hit could not tell anyone *which note* it came from.
+    source_path: str | None = None
 
     def stale_days(self, stale_days: dict[str, int]) -> int | None:
         """Age in days if the entry is stale, otherwise None."""
@@ -188,6 +191,7 @@ def _row_to_entry(row: sqlite3.Row, keywords: list[str], scope_name: str) -> Ent
         updated_at=row["updated_at"],
         checked_at=row["checked_at"],
         scope=scope_name,
+        source_path=row["source_path"],
     )
 
 

@@ -11,3 +11,34 @@ decision = 30
 feature = 7
 convention = 30
 note = 14
+
+# ---------------------------------------------------------------------------
+# Obsidian. Leave `vault` unset and none of this applies — dejavu works alone.
+#
+# `dejavu obsidian init <path-to-vault>` fills this in for you.
+# The vault is where *user*-level knowledge lives: things that stay true in a
+# different repository, and that you will read back yourself.
+
+# [obsidian]
+# vault = "~/Documents/MyVault"
+#
+# Folders that are indexed and written to. Anything not listed is invisible to
+# dejavu, so a vault full of personal notes stays out of your work sessions.
+# include = ["Knowledge", "UserInfo", "Research"]
+#
+# auto        detect iCloud / Dropbox / Google Drive / Obsidian Sync and, when
+#             found, only ever create and append — a body rewritten here could
+#             lose an edit made on another device
+# full        allow rewriting note bodies (local, unsynced vaults)
+# append-only force the safe behaviour regardless of where the vault lives
+# write_mode = "auto"
+#
+# How much of an investigation to file under Research/
+#   all       mirror every handoff note
+#   findings  reusable discoveries only (default)
+#   manual    only when you ask
+# research = "findings"
+#
+# Whether to offer to promote project knowledge to the vault
+#   ask | always | never
+# promote = "ask"
