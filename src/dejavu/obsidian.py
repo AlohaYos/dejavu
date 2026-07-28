@@ -59,7 +59,44 @@ MAX_SLUG = 80
 # title rule, a different keyword set. Files are normally skipped when their mtime and
 # size are unchanged, so without this an upgraded dejavu would keep serving rows built by
 # the previous version's rules, and `dejavu obsidian sync` would report nothing to do.
-INDEX_VERSION = 1
+INDEX_VERSION = 2
+
+# Embeddings live beside the index they describe, keyed by the same `uid`. That uid is
+# derived from the note's path, so a re-index never orphans a vector — and when a note is
+# deleted or renamed, one DELETE at the end of a sync clears the row it left behind.
+# Kept in a separate table rather than a column so that `store.SCHEMA` stays untouched and
+# `search.py` keeps working over these rows without knowing embeddings exist.
+VECTORS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS vectors (
+  uid        TEXT PRIMARY KEY,
+  model      TEXT    NOT NULL,
+  dim        INTEGER NOT NULL,
+  text_hash  TEXT    NOT NULL,
+  vec        BLOB    NOT NULL,
+  created_at TEXT    NOT NULL,
+  -- 'index' for notes inside the indexed folders, 'link' for anything embedded by the
+  -- bulk linking utility. The orphan sweep below only touches 'index' rows: a note the
+  -- user pointed the utility at has no index row to be orphaned from, and deleting its
+  -- vector on an unrelated sync would silently make every later run slower.
+  origin     TEXT    NOT NULL DEFAULT 'index'
+);
+"""
+
+
+def ensure_vectors(con: sqlite3.Connection) -> None:
+    con.executescript(VECTORS_SCHEMA)
+    columns = {row["name"] for row in con.execute("PRAGMA table_info(vectors)").fetchall()}
+    if "origin" not in columns:
+        # Vectors are derived data: rebuilding them costs a backfill, and carrying a
+        # migration for a table that can be regenerated is not worth the code.
+        con.executescript("DROP TABLE vectors;" + VECTORS_SCHEMA)
+
+
+def _has_vectors(con: sqlite3.Connection) -> bool:
+    row = con.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'vectors'"
+    ).fetchone()
+    return row is not None
 
 
 class WriteRefused(RuntimeError):
@@ -139,6 +176,66 @@ def render_frontmatter(fields: dict[str, str | list[str]]) -> str:
             lines.append(f"{key}: {_scalar(value)}")
     lines.append("---")
     return "\n".join(lines) + "\n"
+
+
+def splice_frontmatter(raw: str, key: str, value: list[str]) -> str:
+    """Replace one key inside a frontmatter block, leaving every other line byte-identical.
+
+    Re-serialising the whole block would be simpler and would also destroy keys dejavu
+    does not understand — `autolink:` lists written by another script, comments, ordering
+    a human chose. So the replacement is done line by line: the key's own line goes, any
+    indented continuation of it goes with it, and nothing else is touched.
+    """
+    rendered = f"{key}: [{', '.join(_scalar(v) for v in value)}]"
+    lines = raw.splitlines()
+    out: list[str] = []
+    i = 0
+    replaced = False
+    while i < len(lines):
+        line = lines[i]
+        name = line.partition(":")[0].strip()
+        if not line[:1].isspace() and name == key:
+            out.append(rendered)
+            replaced = True
+            i += 1
+            # Drop the block-list form (`- item` lines) that belonged to this key.
+            while i < len(lines) and (lines[i][:1].isspace() or lines[i].lstrip().startswith("-")):
+                i += 1
+            continue
+        out.append(line)
+        i += 1
+    if not replaced:
+        out.append(rendered)
+    return "\n".join(out)
+
+
+def set_frontmatter_key(
+    path: Path,
+    key: str,
+    value: list[str],
+    *,
+    mode: str,
+    expected_mtime_ns: int | None = None,
+) -> None:
+    """Rewrite a single frontmatter key in place.
+
+    Refused on synced vaults for the same reason `replace_body` is: the file is rewritten
+    whole, and another device may be mid-edit.
+    """
+    if mode != "full":
+        raise WriteRefused(
+            "The vault syncs to other devices, so rewriting frontmatter could discard an "
+            "edit made elsewhere."
+        )
+    text = path.read_text(encoding="utf-8")
+    if not is_dejavu_note(text):
+        raise WriteRefused(f"{path.name} was not written by dejavu, so it will not be modified.")
+    if expected_mtime_ns is not None and path.stat().st_mtime_ns != expected_mtime_ns:
+        raise WriteRefused(f"{path.name} changed on disk since it was read.")
+    raw, body = split_frontmatter(text)
+    if raw is None:  # pragma: no cover - is_dejavu_note already implies frontmatter
+        raise WriteRefused(f"{path.name} has no frontmatter.")
+    path.write_text(f"---\n{splice_frontmatter(raw, key, value)}\n---\n{body}", encoding="utf-8")
 
 
 def is_dejavu_note(text: str) -> bool:
@@ -236,6 +333,8 @@ def create_note(
     tags: list[str] | None = None,
     project: str | None = None,
     filename: str | None = None,
+    related: list[str] | None = None,
+    related_key: str = "related",
 ) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     fields: dict[str, str | list[str]] = {}
@@ -246,6 +345,10 @@ def create_note(
     fields[MARKER_KEY] = MARKER_VALUE
     if project:
         fields["project"] = project
+    # Links go in at creation time rather than in a second write: one file operation
+    # instead of two, and nothing to refuse on an append-only vault.
+    if related:
+        fields[related_key] = related
     fields["created"] = datetime.now().astimezone().strftime("%Y-%m-%d")
 
     path = _unique(directory / f"{filename or slugify(title)}.md")
@@ -363,6 +466,24 @@ def split_title(body: str, path: Path) -> tuple[str, str]:
     return path.stem, body.strip()
 
 
+def title_and_body(text: str, body: str, path: Path) -> tuple[str, str]:
+    """What to call a note, and what is left of it once the name is taken out.
+
+    dejavu writes `# <title>` as the first line of every note it creates, so for its own
+    notes that heading is the title. Nobody else's notes work that way: a chapter opening
+    with "Introduction" is not a note called "Introduction", and treating it as one names
+    the note after a word that says nothing and feeds that same word to the embedding
+    model as the note's subject — which is how a vault ends up with a dozen documents that
+    all look alike because they all begin the same way.
+
+    Obsidian's own convention is that the file name is the title, so that is what is used
+    for everything dejavu did not write.
+    """
+    if is_dejavu_note(text):
+        return split_title(body, path)
+    return path.stem, body.strip()
+
+
 def _keywords_for(fields: dict[str, str | list[str]], rel: Path) -> list[str]:
     words: list[str] = []
     tags = fields.get("tags")
@@ -471,7 +592,7 @@ def index_markdown_tree(
                     if isinstance(raw_category, str) and raw_category in CATEGORIES
                     else "note"
                 )
-                title, body = split_title(body, path)
+                title, body = title_and_body(text, body, path)
                 _write_row(
                     con,
                     uid=stable_uid(rel_path),
@@ -494,6 +615,15 @@ def index_markdown_tree(
             if rel_path not in seen:
                 con.execute("DELETE FROM entries WHERE id = ?", (entry_id,))
                 stats.removed += 1
+
+        if stats.removed and _has_vectors(con):
+            # The note is gone, so its embedding describes nothing. This is the only
+            # place vectors are deleted, and it is deliberately not a JOIN on every sync:
+            # nothing was removed, nothing can be orphaned.
+            con.execute(
+                "DELETE FROM vectors WHERE origin = 'index' "
+                "AND uid NOT IN (SELECT uid FROM entries)"
+            )
 
         con.commit()
         stats.total = int(

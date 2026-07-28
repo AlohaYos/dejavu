@@ -12,9 +12,11 @@ off yesterday".
 
 dejavu also pairs with **Obsidian**, a free notes app. Together, what Claude remembers
 becomes notes *you* can read back — and the same knowledge becomes available from every
-way you reach Claude: the terminal, Claude Desktop chat, Cowork, and Xcode.
+way you reach Claude: the terminal, Claude Desktop chat, Cowork, and Xcode.  
+There is also an optional feature that reads the notes in an Obsidian vault and links the
+related ones to each other.
 
-Everything stays on your own machine. No network access, no account, no subscription.
+Everything stays on your own machine. No account, no subscription, and nothing leaves it.
 
 [日本語](README.ja.md)
 
@@ -32,7 +34,8 @@ Everything stays on your own machine. No network access, no account, no subscrip
 8. [Using it from each surface (chat, Cowork, terminal, Xcode)](#using-it-from-each-surface)
 9. [If you already use Obsidian](#if-you-already-use-obsidian)
 10. [FAQ](#faq)
-11. [Going deeper](#going-deeper)
+11. [Appendix: connecting a pile of your own notes](#appendix-connecting-a-pile-of-your-own-notes)
+12. [Going deeper](#going-deeper)
 
 ---
 
@@ -353,7 +356,8 @@ back next time you ask. And what comes back is something you can open and read y
 
 ## Install
 
-There are at most four steps. Work down the list; it takes about ten minutes.
+There are at most five steps. Work down the list; it takes about ten minutes (step 5
+adds a little more, for the model download).
 
 | | Step | Who needs it |
 | --- | --- | --- |
@@ -361,6 +365,7 @@ There are at most four steps. Work down the list; it takes about ten minutes.
 | 2 | Connect Obsidian | optional (recommended) |
 | 3 | Enable it in Claude Desktop | if you use chat or Cowork |
 | 4 | Add it to a project | if you write code |
+| 5 | Link your notes to each other | optional (needs Ollama) |
 
 ### 1. Install dejavu
 
@@ -437,6 +442,39 @@ It creates a `.dejavu/` folder and appends a single line each to `CLAUDE.md` and
 progress, and safe to run twice by accident.
 
 Running it in a project is what creates that project's diary.
+
+### 5. Link your notes to each other (optional)
+
+When dejavu writes a note into Obsidian, this **links it to your earlier notes on the same
+subject**. "I think I looked into this before" becomes something you notice without going
+looking for it.
+
+It needs a model running on your own machine ([Ollama](https://ollama.com)).
+**Everything above works without it.**
+
+1. Install Ollama from <https://ollama.com/download> and start it
+2. Run these three lines in Terminal
+
+```bash
+ollama pull bge-m3
+dejavu config relate embed
+dejavu obsidian relate --backfill
+```
+
+In order: fetch the model that reads text, tell dejavu to use it, and let it read the
+notes already in your vault. Only the third line takes a few minutes.
+
+That is all. From here on, links appear as notes are written.
+
+- Check it is working → `dejavu obsidian doctor`
+- **While Ollama is stopped, only the links wait.** Notes save as usual and are linked
+  the next time it runs. To do it now: `dejavu obsidian relate --start` (which offers to
+  start it for you)
+- Turn it off → `dejavu config relate off` (links already written stay)
+- Nothing leaves your machine
+
+The settings are in
+[REFERENCE](docs/REFERENCE.md#automatic-linking-between-notes-ollama).
 
 ---
 
@@ -557,7 +595,9 @@ Claude saves as it works, so mostly no. The one habit worth building is saying "
 we did today" before you stop. That is what makes "continue from yesterday" work.
 
 **Does anything get sent anywhere?**
-No. dejavu has no networking code in it at all, and needs no account.
+No. dejavu never talks to anything outside your machine, and needs no account. With
+[note linking](#5-link-your-notes-to-each-other-optional) turned on, the only thing that
+ever sees your text is the Ollama running on that same machine.
 
 **Does it slow Claude down?**
 It speeds things up. A search finishes in tens of milliseconds and saves Claude from
@@ -596,6 +636,79 @@ It is built for an agent to drive, though, and that is where it earns its keep.
 **How do I stop using it?**
 Delete `.dejavu/` from the project and remove the one line added to `CLAUDE.md`. Nothing
 was left anywhere else. Vault notes are plain text files and simply stay where they are.
+
+---
+
+## Appendix: connecting a pile of your own notes
+
+As described in "Link your notes to each other", dejavu can link the notes it saves into
+Obsidian to your other notes automatically. It leaves the notes it did not write alone,
+though — that restraint is what stops it from rewriting your own notes behind your back.
+
+But you may well want this:
+
+> I want to pull every document on my computer into Obsidian and link them all together.
+> Having an AI do that work would mean handing private material to a service somewhere
+> else. I want the linking done using nothing but what is on this machine.
+
+That is what this utility is for.  
+Once notes are linked to each other like this, dejavu can follow the trail from one to the
+next, and gets much better at bringing back things you had forgotten you knew.
+
+### The one feature that changes your own vault files
+
+The rule is that dejavu only touches notes it wrote itself. This is the exception.
+**It adds links to notes you wrote.** Because it works on your own notes directly, it is
+guarded from several directions at once — confirmation before it runs, and undo after.
+
+### When to use it
+
+After moving a stack of scattered files into Obsidian, when you want **the ones about the
+same subject linked to each other**. "I'm sure I looked into this before" becomes
+something you notice without going looking, and related material becomes easier to find.
+Think of it as doing the work of linking each note by hand, on your behalf, in one pass.
+
+### What to say to Claude
+
+Make a folder in your vault (`Inbox`, say), drop the files in, and ask:
+
+> "Link up the notes I put in Inbox"
+
+dejavu looks first and answers with what it found:
+
+> "42 notes. I can add 118 links between the ones about the same subject. 12 of them are
+> notes you wrote, so those files would change. This can be undone. Go ahead?"
+
+**Nothing changes until you say yes.**
+
+### Checking the result
+
+Open one of the notes in Obsidian and you will find this at the end:
+
+```
+## Related
+
+- [[Sorting out receipts]]
+- [[Filing as a sole trader]]
+```
+
+Click a link to jump straight to the other note. Open Obsidian's **graph view** and the
+connections between your material start to become visible.
+
+### Removing the links
+
+Tell Claude "undo those links" and **only the added links go away**. Anything you wrote
+after they were added stays where it is, so there is nothing to worry about.
+
+The files as they were before are backed up elsewhere on your machine (and dejavu tells
+you where it put them).
+
+> - This feature uses [Ollama](#5-link-your-notes-to-each-other-optional). Finish step 5
+>   before running it
+> - Your notes are never sent off your machine. Everything happens locally
+> - Text files (`.txt`) are converted to `.md` before they are linked — you are asked first
+> - Settings and troubleshooting are written up in
+>   [REFERENCE.md](docs/REFERENCE.md#connecting-a-pile-of-your-own-notes)
 
 ---
 

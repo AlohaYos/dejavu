@@ -132,3 +132,10 @@ def test_the_key_of_a_later_section_is_not_mistaken_for_ours(tmp_path: Path):
 
     assert data["obsidian"]["research"] == "findings"
     assert data["other"]["research"] == "all"
+
+
+def test_the_similarity_default_is_the_one_that_was_measured(project):
+    """0.65 came from running it over real vaults; 0.6 let the top_k cap pick the links."""
+    from dejavu import scope as scope_mod
+
+    assert scope_mod.obsidian_config().relate_min_sim == 0.65

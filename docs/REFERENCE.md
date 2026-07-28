@@ -13,14 +13,15 @@ use dejavu.
 4. [How the write mode is decided](#how-the-write-mode-is-decided)
 5. [Note format](#note-format)
 6. [Automatic linking between notes (Ollama)](#automatic-linking-between-notes-ollama)
-7. [Categories](#categories)
-8. [When knowledge goes stale](#when-knowledge-goes-stale)
-9. [Credentials are never stored](#credentials-are-never-stored)
-10. [Sharing with a team](#sharing-with-a-team)
-11. [The MCP server](#the-mcp-server)
-12. [Coexisting with Claude's own memory](#coexisting-with-claudes-own-memory)
-13. [Using it in Xcode](#using-it-in-xcode)
-14. [Troubleshooting](#troubleshooting)
+7. [Connecting a pile of your own notes](#connecting-a-pile-of-your-own-notes)
+8. [Categories](#categories)
+9. [When knowledge goes stale](#when-knowledge-goes-stale)
+10. [Credentials are never stored](#credentials-are-never-stored)
+11. [Sharing with a team](#sharing-with-a-team)
+12. [The MCP server](#the-mcp-server)
+13. [Coexisting with Claude's own memory](#coexisting-with-claudes-own-memory)
+14. [Using it in Xcode](#using-it-in-xcode)
+15. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -89,6 +90,12 @@ usually the right answer.
 | `dejavu obsidian add ... --category <name>` | File it in `Knowledge/<name>/` — **only if that folder already exists** |
 | `dejavu obsidian add ... --tags "a,b"` | Written to the note's frontmatter |
 | `dejavu obsidian add ... --replace` | Replace an existing note's body (refused on a synced vault) |
+| `dejavu obsidian relate "<title>"` | Show the links a note would get (**writes nothing**) |
+| `dejavu obsidian relate "<title>" --write` | Write them |
+| `dejavu obsidian relate --backfill` | Embed the notes you already have (`relate = embed`) |
+| `dejavu obsidian relate --rebuild` | Throw the vectors away and build them again |
+| `dejavu obsidian relate --start` | Start Ollama and add every link that is waiting |
+| `dejavu obsidian relate --pending` | List the notes still waiting to be linked |
 | `dejavu research "<title>" --body -` | Record under `Research/<project>/<date>-<title>.md` |
 | `dejavu research ... --project <name>` | Default: the current directory name |
 
@@ -158,6 +165,16 @@ research_dir  = "Research"
 write_mode    = "auto"       # auto | full | append-only
 research      = "findings"   # all | findings | manual
 promote       = "ask"        # ask | always | never
+relate        = "off"        # off | search | embed
+relate_model  = "bge-m3"
+relate_host   = "http://localhost:11434"
+relate_key    = "related"
+relate_top_k  = 5
+relate_min_sim   = 0.65
+relate_min_chars = 40
+relate_autostart = "ask"     # ask | always | never
+relate_keep_alive = "24h"
+relate_defer_days = 7
 ```
 
 | Key | Meaning |
@@ -170,6 +187,7 @@ promote       = "ask"        # ask | always | never
 | `write_mode` | See below |
 | `research` | How much of an investigation to keep |
 | `promote` | Whether to offer to lift project knowledge into the vault |
+| `relate*` | [Automatic linking](#automatic-linking-between-notes-ollama). Off by default |
 
 ### `research` — how much to file
 
@@ -251,6 +269,23 @@ safeAreaInsets.bottom reads as 0.
 script survives an append untouched, because frontmatter edits splice individual lines
 rather than re-serialising the block.
 
+### What a note is called
+
+The name that appears in search results and in links is decided like this.
+
+| Note | Name |
+| --- | --- |
+| Written by dejavu (`source: dejavu` present) | its leading `# heading` |
+| Anything else (yours) | **the file name** |
+
+In Obsidian the file name *is* the note's name, so that is what dejavu follows. The first
+line of a note someone wrote is usually the opening of a chapter — "Introduction" — rather
+than its title. Treating that as the name leaves the note called something meaningless,
+and puts the same word at the front of the text handed to the embedding model, so
+**documents that merely open the same way start to look related.**
+
+Notes dejavu wrote are the exception because dejavu writes that heading as the title.
+
 ### Folders
 
 `Knowledge/` starts flat. Create subfolders and dejavu will file notes into them, but it
@@ -268,19 +303,256 @@ dejavu obsidian init <vault> --preset dev
 
 ## Automatic linking between notes (Ollama)
 
+The moment dejavu writes a note into Obsidian, it writes `[[links]]` to the existing notes
+that are about the same thing. The only trigger is dejavu's own write path — no daemon, no
+file watcher. **This is not a nightly batch job.**
+
+### Three modes
+
+| `relate` | How closeness is judged | Needs |
+| --- | --- | --- |
+| `off` (default) | — | — |
+| `search` | Shared words (the FTS5 → keywords → LIKE tiers) | nothing |
+| `embed` | **What the text means** (cosine similarity of embeddings) | [Ollama](https://ollama.com) |
+
+```bash
+dejavu config relate embed
+ollama pull bge-m3
+dejavu obsidian relate --backfill      # embed the notes you already have, once
+```
+
+Ollama itself comes from <https://ollama.com/download>, or `brew install ollama` if you
+prefer the terminal — in which case leave `ollama serve` running.
+
+`--backfill` takes one to three minutes for a few hundred notes. It commits batch by
+batch, so **stopping it is safe: run it again and it carries on from where it left off.**
+`--rebuild` throws every stored vector away first, which is what you want after changing
+`relate_model`.
+
+`dejavu obsidian doctor` prints the current mode on its `Auto-link` line, whether Ollama
+answered (and why not, if it did not) on the `Ollama` line, and how many notes have a
+vector on the `Vectors` line. When links are not appearing, start there.
+
+### When Ollama is not running
+
+**Links are held back and added later.** They are not quietly made by words instead:
+someone who chose `embed` paid for links that follow meaning, and on a synced vault a link
+once written **cannot be corrected afterwards**.
+
+- **Notes still save, exactly as before.** A model server being down never costs someone
+  their writing
+- Held-back notes are recorded in `pending_relate` and **cleared automatically the next
+  time Ollama answers** — up to five per write, with nobody having to run anything
+- `dejavu obsidian relate --pending` lists what is waiting
+- `dejavu obsidian relate --start` starts it now and clears the lot, asking first if it
+  has to launch anything (`relate_autostart`)
+- A note still waiting after `relate_defer_days` (7 by default) **is linked by words and
+  finished**. Left forever unlinked is worse than imperfectly linked
+
+For sixty seconds after a failure, dejavu holds notes back without trying to connect, so a
+run of writes during an outage costs one timeout rather than one each. `doctor` ignores
+that memory and always makes a real connection.
+
+### Keeping the model loaded
+
+Ollama unloads a model five minutes after its last use. Left alone that produces the most
+confusing failure of all — running, but timing out on the first note after a break — so
+dejavu sends **`keep_alive` (default `"24h"`) with every request.**
+
+The `OLLAMA_KEEP_ALIVE` environment variable is not used. Making it stick means writing a
+launch agent, and **a change left on someone's machine is a change they have to be told
+how to undo.** In the request, it affects dejavu's own calls and nothing else.
+
+### How it gets started
+
+`--start` picks the method from how Ollama was installed.
+
+| Found | How it starts |
+| --- | --- |
+| `/Applications/Ollama.app` | `open -ga Ollama` |
+| A Homebrew install | `brew services start ollama` (**this also makes it start at login** — said plainly when asking) |
+| Neither | Nothing is run; you get the download link |
+
+The app is preferred because `brew services` writes a launch agent, which turns "start it
+now" into a permanent change. dejavu **never stops Ollama**: telling "I started this" apart
+from "it was already running" is not worth getting wrong on someone else's machine.
+
+`relate_autostart` is `ask` (default), `always` or `never`. **A refusal is remembered** —
+being asked once is a question, being asked every time is a reason to give up on the
+feature.
+
 **The core of dejavu needs no AI model and no network connection.** Search runs on
-SQLite's own full-text index (FTS5) and nothing else. The zero-dependency property is what
-keeps the Homebrew formula free of extra downloads, so it is a line held deliberately.
+SQLite's own full-text index (FTS5) and nothing else. Only `embed` talks to anything, and
+only over HTTP to the Ollama on the same machine — using `urllib`, so the dependency count
+stays at zero.
 
-The one exception is **linking notes to each other by meaning**. That needs text
-embeddings, which means a local model such as [Ollama](https://ollama.com).
+### Where the links are written
 
-So it is **kept out of the core and split into a separate command.** Without Ollama that
-one feature is unavailable and nothing else is affected. **Everything documented in this
-reference works without it.**
+| Case | Destination |
+| --- | --- |
+| A new note | the `related:` key, written as part of creating the file (one write, not two) |
+| `write_mode = full` | the `related:` line is replaced |
+| `write_mode = append-only` | `---` and a `## Related` section are **appended** to the body |
 
-Obsidian also has manual `[[links]]` and a graph view of its own, so the vault remains
-perfectly usable with no automatic linking at all.
+On an append-only vault, a note that already has a `## Related` section is **left alone**:
+moving or rewriting it would mean rewriting the whole file, which is what append-only
+exists to avoid. Text appended afterwards therefore ends up below that section. That is
+known and accepted.
+
+### What it never touches
+
+- **A note without `source: dejavu` is never written to.** Notes you wrote by hand are out
+  of scope
+- Frontmatter is spliced line by line, so keys other tools wrote — `autolink:` and the
+  like — survive untouched
+- **No backlinks are written.** Obsidian's backlink pane and graph view show the reverse
+  direction for free
+
+### Settings
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `relate` | `off` | `off` / `search` / `embed` |
+| `relate_key` | `related` | the frontmatter key to write |
+| `relate_top_k` | `5` | most links to add to one note |
+| `relate_min_chars` | `40` | notes shorter than this are not linked |
+| `relate_model` | `bge-m3` | the Ollama model |
+| `relate_host` | `http://localhost:11434` | where Ollama is |
+| `relate_min_sim` | `0.65` | below this, two notes are unrelated (`embed` only) |
+| `relate_autostart` | `ask` | `ask` / `always` / `never` |
+| `relate_keep_alive` | `"24h"` | sent with every request |
+| `relate_defer_days` | `7` | days a note may wait before words are used instead |
+| `link_keep_runs` | `10` | how many backup runs to keep |
+| `link_keep_days` | `30` | how many days of backups to keep |
+
+The default `relate_min_sim` of 0.65 was settled by running it over two real vaults. At
+0.6, nearly every note in a 500-note vault filled `relate_top_k`, which means the cap was
+choosing the links rather than the similarity. The right value depends on the vault, and
+`dejavu obsidian relate "<title>"` (which writes nothing) is the way to find it.
+
+`dejavu obsidian relate "<title>"` prints what would be linked and **writes nothing** —
+the way to settle on a threshold. Add `--write` when you mean it.
+
+### Dropping weak hits (in `search` mode)
+
+A candidate found only by the LIKE tier is dropped: one shared substring is a coincidence,
+not a relationship. **Unless the query contains a term shorter than three characters** —
+for two-character Japanese words (検索 / 認証) LIKE is the only tier that can fire, so
+dropping noise must never quietly drop Japanese.
+
+### Where the vectors live
+
+In a `vectors` table inside `~/.config/dejavu/obsidian.db`, keyed by the same `uid` the
+index uses (derived from the note's path), so re-indexing never orphans one. Delete or
+rename a note and the next sync clears its vector.
+
+The hash is taken over the **embedded text**, not the file. Writing links changes a file's
+mtime but not its meaning, so it does not make dejavu call the model again. The
+`## Related` section and fenced code blocks are stripped before embedding.
+
+---
+
+## Connecting a pile of your own notes
+
+`dejavu obsidian link` **links the notes in a vault folder to each other by meaning.**
+The difference from [automatic linking](#automatic-linking-between-notes-ollama) is the
+target: that one only touches notes dejavu wrote, while this one **edits notes the user
+wrote themselves.**
+
+It is the one feature that deliberately breaks the promise held since v0.4.0 — that a note
+without `source: dejavu` is never written to. That is why it is kept separate.
+
+### What makes it safe
+
+A confirmation stops mattering the moment it is clicked. What this feature rests on is
+**being able to take it back**.
+
+| Mechanism | What it guarantees |
+| --- | --- |
+| Fenced in HTML comments | the exact bytes dejavu added are known |
+| Every file copied before any is written | a failure partway leaves the vault untouched |
+| Post-write hash in the manifest | a restore can tell "edited since" from "untouched" |
+| Plan and apply are separate | what was shown is what happens |
+
+### What gets added
+
+```markdown
+<!-- dejavu:links -->
+## Related
+
+- [[Sorting out receipts]]
+- [[Filing as a sole trader]]
+<!-- /dejavu:links -->
+```
+
+The comments are invisible in Obsidian. **Frontmatter is never touched** — other plugins
+such as Dataview may be reading it.
+
+**`source: dejavu` is never added.** With it, `append_to_note` and `replace_body` would
+start treating the user's own writing as something dejavu may edit.
+
+### Commands
+
+| Command | Description |
+| --- | --- |
+| `dejavu obsidian link <folder>` | Show the plan. **Writes nothing** |
+| `dejavu obsidian link <folder> --apply --plan-id <id>` | Carry it out |
+| `dejavu obsidian link --all` | The whole vault (only when said explicitly) |
+| `dejavu obsidian link --history` | Past runs |
+| `dejavu obsidian link --remove [--run <id>]` | Take out only what was added |
+| `dejavu obsidian link --restore [--run <id>]` | Put the files back as they were |
+
+A plan gets an id, and applying requires it. Plans expire after 15 minutes, and **files
+that changed since the plan are dropped from the run** and reported.
+
+### How the links are chosen
+
+Thresholds and model come from the `relate_*` settings; no separate ones are invented for
+bulk runs. Two problems do appear in bulk that never appear one note at a time.
+
+**One-sided resemblance is dropped.** A link is kept only when each note is among the
+other's nearest — a one-way match usually means one of them is vague.
+
+**Hubs are removed.** A note close to more than 30% of the others (a table of contents, an
+index, a diary) is left out, and **the list is reported afterwards.** Removing them
+silently would leave the user wondering why that one note never gets linked.
+
+### Backups
+
+```
+~/.config/dejavu/backups/<vault>-<hash>/<timestamp>/
+  manifest.json
+  Inbox/tax-return.md
+```
+
+**Never inside the vault**: iCloud would copy every backup to every device, and could
+raise sync conflicts on them.
+
+The last **10 runs or 30 days** are kept (`link_keep_runs` / `link_keep_days`). Pruning
+happens **only when the feature is next used** — nothing runs in the background. Runs that
+were undone are dropped after a week.
+
+### Two kinds of undo
+
+| | `--remove` (preferred) | `--restore` |
+| --- | --- | --- |
+| What it does | takes out the added block | puts the whole file back |
+| Text written since | **kept** | lost |
+| Requires | the block still being there | the file matching its post-write hash |
+
+`--restore` **refuses** on notes edited since the run. `--force` overrides it, and those
+edits are lost.
+
+### About `.txt`
+
+Obsidian only reads `.md`. The plan reports how many `.txt` files were found, and applying
+renames them. The renames are recorded in the manifest and undone with the run.
+
+### From MCP
+
+Three tools: `plan_note_links`, `apply_note_links`, `undo_note_links`.
+`apply_note_links` refuses without `confirmed: true`, and its description states that it
+**edits notes the user wrote, so the counts must be shown and agreed to first.**
 
 ---
 

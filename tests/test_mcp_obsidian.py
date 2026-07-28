@@ -11,6 +11,7 @@ exactly as they do in the CLI, or one path becomes a hole the other's tests cann
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -182,3 +183,30 @@ def test_no_conflict_is_reported_when_only_one_side_answers(connected: Path, pro
 
     assert payload["results"]
     assert "conflict_candidates" not in payload
+
+
+# ---------------------------------------------------------------- automatic linking
+
+
+def test_the_start_tool_is_hidden_when_linking_is_off(connected):
+    """A tool that can do nothing still costs context on every turn."""
+    names = {tool["name"] for tool in mcp.visible_tools()}
+    assert "enable_autolink" not in names
+
+
+def test_the_start_tool_appears_once_linking_is_on(connected, monkeypatch):
+    embedding = replace(scope_mod.obsidian_config(), relate="embed")
+    monkeypatch.setattr(scope_mod, "obsidian_config", lambda *a, **k: embedding)
+
+    names = {tool["name"] for tool in mcp.visible_tools()}
+
+    assert "enable_autolink" in names
+
+
+def test_starting_without_the_user_agreeing_is_refused(connected, monkeypatch):
+    """The confirmation belongs to the user, not to the model."""
+    embedding = replace(scope_mod.obsidian_config(), relate="embed")
+    monkeypatch.setattr(scope_mod, "obsidian_config", lambda *a, **k: embedding)
+
+    with pytest.raises(ValueError, match="Ask the user first"):
+        mcp.call_tool("enable_autolink", {"confirmed": False})

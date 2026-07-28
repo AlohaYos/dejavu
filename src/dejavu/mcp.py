@@ -41,7 +41,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import __version__, obsidian, preflight, safety
+from . import __version__, link, obsidian, preflight, relate, safety
 from . import scope as scope_mod
 from .cli import CONFLICT_INSTRUCTION, find_conflict
 from .scope import CATEGORIES, STATUSES, Scope
@@ -322,7 +322,136 @@ OBSIDIAN_TOOLS: list[dict[str, Any]] = [
     },
 ]
 
+AUTOLINK_TOOL = {
+    "name": "enable_autolink",
+    "title": "Start the note-linking model",
+    "description": (
+        "Start the local model that links vault notes to each other, then add the links "
+        "for every note that was waiting on it. Call this when a write reported "
+        "`link_mode: deferred`, or when the user asks why their notes are not linked.\n"
+        "ALWAYS ask the user before calling this: it starts a program on their machine.\n"
+        "This call takes 5-30 seconds — the first run has to read a 1.2GB model from "
+        "disk. Tell the user it is starting and will take a moment BEFORE you call it, "
+        "or they will be left watching nothing happen."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "confirmed": {
+                "type": "boolean",
+                "description": "True once the user has agreed to start it.",
+            }
+        },
+        "required": ["confirmed"],
+    },
+}
+
 TOOLS.extend(OBSIDIAN_TOOLS)
+
+
+LINK_TOOLS: list[dict[str, Any]] = [
+    {
+        "name": "plan_note_links",
+        "title": "Plan links between the user's own notes",
+        "description": (
+            "Work out which notes in a vault folder are about the same things, and report "
+            "what linking them would change. WRITES NOTHING. Use this when the user asks "
+            "to connect, link or organise notes they put into the vault themselves.\n"
+            "Show the user the counts it returns — especially `handwritten`, the number of "
+            "their own notes that would be edited — before going any further."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "folder": {
+                    "type": "string",
+                    "description": "Folder inside the vault. Omit only with all: true.",
+                },
+                "all": {"type": "boolean", "description": "The whole vault. Prefer a folder."},
+            },
+        },
+    },
+    {
+        "name": "apply_note_links",
+        "title": "Add the planned links",
+        "description": (
+            "Carry out a plan from plan_note_links.\n"
+            "THIS EDITS NOTES THE USER WROTE THEMSELVES. Before calling it you MUST show "
+            "them the plan (how many notes, how many links, how many are their own) and "
+            "get an explicit yes. Never call it on your own initiative.\n"
+            "Tell them it can be undone — undo_note_links takes the added links back out "
+            "and leaves anything they write afterwards alone."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "plan_id": {"type": "string", "description": "From plan_note_links."},
+                "confirmed": {
+                    "type": "boolean",
+                    "description": "True once the user has agreed, in their own words.",
+                },
+                "convert_txt": {
+                    "type": "boolean",
+                    "description": "Rename .txt files to .md so Obsidian can see them.",
+                    "default": True,
+                },
+            },
+            "required": ["plan_id", "confirmed"],
+        },
+    },
+    {
+        "name": "undo_note_links",
+        "title": "Take the added links back out",
+        "description": (
+            "Remove the links a previous run added, leaving every other edit in place. "
+            "Defaults to the most recent run. Use this whenever the user is unhappy with "
+            "the result — it is always safe, and nothing they wrote is lost."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"run": {"type": "string", "description": "Default: the last run."}},
+        },
+    },
+]
+
+
+def visible_tools() -> list[dict[str, Any]]:
+    """The tool list for this machine's configuration.
+
+    `enable_autolink` is hidden unless linking is switched on. A tool that cannot do
+    anything useful still costs context on every single turn, and invites the model to
+    try it and report a failure the user never needed to hear about.
+    """
+    cfg = scope_mod.obsidian_config()
+    if not cfg.enabled:
+        return TOOLS
+    extra = list(LINK_TOOLS)
+    if cfg.relate != "off":
+        extra.append(AUTOLINK_TOOL)
+    return [*TOOLS, *extra]
+
+
+def _link_status(cfg, links: list[str], stored: str) -> dict:
+    """How the links were chosen, and whether any are still owed.
+
+    Without this the degradation is invisible: stderr goes nowhere an MCP host displays,
+    so a user in chat would never learn that their notes are being linked by words, or
+    not yet linked at all.
+    """
+    if cfg.relate == "off":
+        return {}
+    if stored == "deferred":
+        waiting = len(relate.pending(cfg))
+        return {
+            "link_mode": "deferred",
+            "pending": waiting,
+            "hint": (
+                "The model that links notes is not running, so links are on hold. "
+                "Ask the user whether to start it, and call enable_autolink if they agree."
+            ),
+        }
+    mode = "meaning" if cfg.relate == "embed" else "words"
+    return {"link_mode": mode} if links else {"link_mode": mode, "pending": 0}
 
 
 def _vault():
@@ -390,24 +519,37 @@ def call_tool(name: str, args: dict[str, Any]) -> dict:
         base = vault / cfg.knowledge_dir
         mode, _ = obsidian.effective_write_mode(vault, cfg.write_mode)
         existing = obsidian.find_note(base, args["title"])
+        tags = normalize_keywords(args.get("tags"))
         try:
             if existing is not None:
                 obsidian.append_to_note(existing, body)
                 path, action = existing, "appended"
+                links = relate.apply_to_existing(cfg, path, vault=vault, mode=mode)
             else:
+                links = relate.suggest_for_new(cfg, title=args["title"], body=body, keywords=tags)
                 path = obsidian.create_note(
                     obsidian._category_dir(base, args.get("category")),
                     args["title"],
                     body,
                     category=args.get("category"),
-                    tags=normalize_keywords(args.get("tags")),
+                    tags=tags,
                     project=args.get("project"),
+                    related=links,
+                    related_key=cfg.relate_key,
                 )
                 action = "created"
         except obsidian.WriteRefused as exc:
             raise ValueError(str(exc)) from exc
         obsidian.sync_vault(cfg, force=True)
-        return {"file": path.relative_to(vault).as_posix(), "action": action, "write_mode": mode}
+        stored = relate.remember(cfg, path, vault=vault)
+        relate.catch_up(cfg)
+        return {
+            "file": path.relative_to(vault).as_posix(),
+            "action": action,
+            "write_mode": mode,
+            "related": links,
+            **_link_status(cfg, links, stored),
+        }
 
     if name == "add_research":
         vault, cfg = _vault()
@@ -417,16 +559,77 @@ def call_tool(name: str, args: dict[str, Any]) -> dict:
         if not project:
             raise ValueError("Pass `project`, or `project_path`, so the note can be filed.")
         day = datetime.now().astimezone().strftime("%Y-%m-%d")
+        tags = normalize_keywords(args.get("tags"))
+        links = relate.suggest_for_new(cfg, title=args["title"], body=body, keywords=tags)
         path = obsidian.create_note(
             vault / cfg.research_dir / project,
             args["title"],
             body,
-            tags=normalize_keywords(args.get("tags")),
+            tags=tags,
             project=project,
             filename=f"{day}-{obsidian.slugify(args['title'])}",
+            related=links,
+            related_key=cfg.relate_key,
         )
         obsidian.sync_vault(cfg, force=True)
-        return {"file": path.relative_to(vault).as_posix(), "project": project}
+        stored = relate.remember(cfg, path, vault=vault)
+        relate.catch_up(cfg)
+        return {
+            "file": path.relative_to(vault).as_posix(),
+            "project": project,
+            "related": links,
+            **_link_status(cfg, links, stored),
+        }
+
+    if name == "enable_autolink":
+        from .cli import _start_linking
+
+        cfg = scope_mod.obsidian_config()
+        if not args.get("confirmed"):
+            raise ValueError("Ask the user first, then call again with confirmed: true.")
+        # ask=False: the user was already asked, by Claude. A second prompt here would be
+        # read from the JSON-RPC stream, which is not a place a person can answer from.
+        return _start_linking(cfg, ask=False)
+
+    if name == "plan_note_links":
+        cfg = scope_mod.obsidian_config()
+        _vault()
+        try:
+            made = link.plan(cfg, None if args.get("all") else args.get("folder"))
+        except (link.LinkRefused, relate.OllamaUnavailable) as exc:
+            raise ValueError(str(exc)) from exc
+        payload = made.as_dict()
+        payload["warning"] = (
+            f"{payload['handwritten']} of these notes were written by the user. "
+            "Show these numbers and get an explicit yes before applying."
+        )
+        return payload
+
+    if name == "apply_note_links":
+        cfg = scope_mod.obsidian_config()
+        _vault()
+        if not args.get("confirmed"):
+            raise ValueError(
+                "Show the user the plan and get their agreement, then call again with "
+                "confirmed: true."
+            )
+        try:
+            result = link.apply(
+                cfg, args["plan_id"], convert_txt=args.get("convert_txt", True)
+            )
+        except link.LinkRefused as exc:
+            raise ValueError(str(exc)) from exc
+        obsidian.sync_vault(cfg, force=True)
+        result["undo"] = "Call undo_note_links to take these links back out."
+        return result
+
+    if name == "undo_note_links":
+        cfg = scope_mod.obsidian_config()
+        _vault()
+        try:
+            return link.remove(cfg, args.get("run"))
+        except link.LinkRefused as exc:
+            raise ValueError(str(exc)) from exc
 
     if name == "obsidian_status":
         cfg = scope_mod.obsidian_config()
@@ -449,6 +652,7 @@ def call_tool(name: str, args: dict[str, Any]) -> dict:
             "by_folder": {f: obsidian.count_in_folder(scope, f) for f in cfg.include},
             "research": cfg.research,
             "promote": cfg.promote,
+            "relate": cfg.relate,
         }
 
     if name == "resume_knowledge":
@@ -639,7 +843,7 @@ def handle(message: dict) -> dict | None:
         return _result(request_id, {})
 
     if method == "tools/list":
-        return _result(request_id, {"tools": TOOLS})
+        return _result(request_id, {"tools": visible_tools()})
 
     if method == "tools/call":
         name = params.get("name")

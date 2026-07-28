@@ -79,12 +79,33 @@ def test_frontmatter_category_is_used_only_when_dejavu_knows_it(vault: Path):
     assert "pattern" in by_path["Knowledge/unknown.md"]["kw"]
 
 
-def test_note_without_frontmatter_falls_back_to_its_heading(vault: Path):
+def test_a_note_dejavu_did_not_write_is_named_by_its_file(vault: Path):
+    """Obsidian's convention, and the only one that holds for someone else's notes.
+
+    A heading like "Introduction" is not the name of a note; taking it would name the note
+    after a word that says nothing and hand that same word to the embedding model as the
+    note's subject.
+    """
     write_note(vault, "Knowledge/plain.md", NOTE_WITHOUT_FM)
 
     _index(vault)
 
-    assert _rows()[0]["title"] == "素のノート"
+    row = _rows()[0]
+    assert row["title"] == "plain"
+    assert "素のノート" in row["body"]  # the heading stays where the author put it
+
+
+def test_a_note_dejavu_wrote_is_named_by_its_heading(vault: Path):
+    """dejavu puts that line there itself, so for its own notes it really is the title."""
+    write_note(
+        vault,
+        "Knowledge/mine.md",
+        "---\nsource: dejavu\n---\n\n# 書いたメモ\n\n本文。\n",
+    )
+
+    _index(vault)
+
+    assert _rows()[0]["title"] == "書いたメモ"
 
 
 def test_title_falls_back_to_the_filename_when_there_is_no_heading(vault: Path):

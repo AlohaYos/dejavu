@@ -71,7 +71,9 @@ def test_tags_are_searchable_as_keywords(indexed):
 
 
 def test_body_text_is_searchable(indexed):
-    assert any("プロフィール" in t for t in _titles("MessagePad"))
+    # Named "Profile" after its file: the note has no `source: dejavu`, so its heading is
+    # a heading rather than its title.
+    assert any("Profile" in t for t in _titles("MessagePad"))
 
 
 def test_no_match_returns_empty(indexed):

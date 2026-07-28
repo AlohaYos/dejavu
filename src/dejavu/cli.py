@@ -11,11 +11,12 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from importlib import resources
 from pathlib import Path
 
-from . import __version__, obsidian, preflight, safety, store
+from . import __version__, link, obsidian, preflight, progress, relate, safety, store
 from . import scope as scope_mod
 from .scope import CATEGORIES, STATUSES, Scope
 from .search import search as run_search
@@ -766,6 +767,18 @@ CONFIG_KEYS = (
     "write_mode",
     "research",
     "promote",
+    "relate",
+    "relate_key",
+    "relate_top_k",
+    "relate_min_chars",
+    "relate_model",
+    "relate_host",
+    "relate_min_sim",
+    "relate_autostart",
+    "relate_keep_alive",
+    "relate_defer_days",
+    "link_keep_runs",
+    "link_keep_days",
 )
 
 CROWDED_FOLDER = 100
@@ -867,6 +880,7 @@ def cmd_obsidian_doctor(args: argparse.Namespace) -> int:
                     "by_folder": counts,
                     "research": cfg.research,
                     "promote": cfg.promote,
+                    "relate": cfg.relate,
                     "index_db": str(scope.db_path),
                 },
                 ensure_ascii=False,
@@ -882,6 +896,27 @@ def cmd_obsidian_doctor(args: argparse.Namespace) -> int:
     print(f"Write mode  {mode}")
     print(f"              because {reason}")
     print(f"Settings    research = {cfg.research}, promote = {cfg.promote}")
+    if cfg.relate == "off":
+        print("Auto-link   off")
+    elif cfg.relate == "search":
+        print(f"Auto-link   search (top {cfg.relate_top_k})")
+    else:
+        print(f"Auto-link   embed ({cfg.relate_model}, top {cfg.relate_top_k})")
+        ok, why = relate.reachable(cfg)
+        print(f"Ollama      {why}")
+        embedded, notes = relate.vector_counts(cfg)
+        print(f"Vectors     {embedded} / {notes} notes read")
+        waiting = relate.pending(cfg)
+        if waiting:
+            noun = "note" if len(waiting) == 1 else "notes"
+            print(f"Pending     {len(waiting)} {noun} waiting to be linked")
+        if not ok:
+            print("\n  Notes are being saved, but their links are on hold. To add them:")
+            print("    dejavu obsidian relate --start")
+        elif waiting:
+            print("\n  Add the links that are waiting: dejavu obsidian relate --start")
+        elif embedded < notes:
+            print("\n  Some notes have not been read yet. Run: dejavu obsidian relate --backfill")
     if not scope.db_path.exists():
         print("\n  Not indexed yet. Run: dejavu obsidian sync")
     crowded = [f for f, c in counts.items() if c > CROWDED_FOLDER]
@@ -890,6 +925,336 @@ def cmd_obsidian_doctor(args: argparse.Namespace) -> int:
             f"\n  {folder}/ holds {counts[folder]} notes. Search does not care, but the file\n"
             f"  explorer will. Consider grouping them into subfolders — dejavu will follow."
         )
+    return EXIT_OK
+
+
+def _drain_with_progress(cfg, bar) -> tuple[int, int]:
+    if not relate.pending(cfg):
+        return 0, 0
+    bar.step("Linking the notes that were waiting")
+    return relate.drain(cfg, progress=lambda done, total: bar.tick(f"{done} / {total}"))
+
+
+def _start_linking(cfg, *, ask: bool) -> dict:
+    """Start the model, wait for it, and clear the backlog. Returns what happened.
+
+    Shared with the MCP tool on purpose: two copies of a consent-and-startup routine
+    would eventually disagree about what counts as consent.
+    """
+    bar = progress.Progress()
+    started_at = time.monotonic()
+
+    # Already running: there is nothing to consent to, and the queue is the only reason
+    # the user ran this. Asking to start something that is running would be nonsense.
+    relate.clear_down(cfg)
+    if relate.reachable(cfg)[0]:
+        resolved, failed = _drain_with_progress(cfg, bar)
+        bar.done()
+        return {
+            "started": True,
+            "method": "already-running",
+            "model": cfg.relate_model,
+            "elapsed_seconds": round(time.monotonic() - started_at, 1),
+            "model_load_seconds": 0.0,
+            "pending_resolved": resolved,
+            "pending_failed": failed,
+        }
+
+    decision = relate.consent(cfg)
+    if decision == "never":
+        return {"started": False, "reason": "autostart is turned off"}
+
+    install = relate.detect_install()
+    if not install.found:
+        return {
+            "started": False,
+            "reason": (
+                "the program that reads your notes is not installed "
+                "(Ollama — see https://ollama.com/download)"
+            ),
+        }
+
+    if ask and decision == "ask":
+        question = "  Start it now?"
+        if install.permanent:
+            question += " It will also start automatically when you log in."
+        print(f"\n  Automatic linking is not running.{question} [y/N] ", end="", flush=True)
+        try:
+            answer = input().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = ""
+        if answer not in ("y", "yes"):
+            relate.remember_refusal(cfg)
+            print("  Left off. Turn it back on with: dejavu config relate_autostart ask")
+            return {"started": False, "reason": "declined"}
+
+    def show(name: str) -> None:
+        bar.step(
+            "Getting ready to link your notes"
+            if name == "port"
+            else "Loading the model that reads them (1.2GB, first time only)"
+        )
+
+    def on_stage(name: str) -> None:
+        show(name)
+        bar.tick()
+
+    show("port")
+    started_at = time.monotonic()
+    try:
+        relate.start(cfg, progress=on_stage)
+    except relate.OllamaUnavailable as exc:
+        bar.done()
+        return {"started": False, "reason": str(exc)}
+    load_seconds = time.monotonic() - started_at
+    resolved, failed = _drain_with_progress(cfg, bar)
+    bar.done()
+
+    return {
+        "started": True,
+        "method": install.method,
+        "model": cfg.relate_model,
+        "elapsed_seconds": round(time.monotonic() - started_at, 1),
+        "model_load_seconds": round(load_seconds, 1),
+        "pending_resolved": resolved,
+        "pending_failed": failed,
+    }
+
+
+def _run_backfill(cfg, *, rebuild: bool, as_json: bool) -> int:
+    """Embed the whole vault. Interruptible: every batch is committed as it finishes."""
+    if cfg.relate != "embed":
+        die(
+            f"Backfill only applies to `relate = embed` (currently {cfg.relate}).\n"
+            "  Matching words needs no preparation — it uses the index you already have."
+        )
+
+    bar = progress.Progress()
+    bar.step("Reading your notes")
+
+    def show(done: int, total: int) -> None:
+        bar.tick(f"{done} / {total}")
+
+    try:
+        embedded, total = relate.backfill(cfg, rebuild=rebuild, progress=show)
+    except relate.OllamaUnavailable as exc:
+        die(
+            f"{exc}\n"
+            f"  Start Ollama, then: ollama pull {cfg.relate_model}\n"
+            "  Notes are still saved and linked by words while it is unavailable."
+        )
+        raise AssertionError from exc  # pragma: no cover
+    except KeyboardInterrupt:
+        bar.done()
+        print("  Stopped. Run the same command again to carry on from here.")
+        return EXIT_OK
+
+    bar.done()
+    if as_json:
+        print(json.dumps({"embedded": embedded, "notes": total}, ensure_ascii=False))
+    else:
+        print(f"✓ Read {embedded} of {total} notes.")
+    return EXIT_OK
+
+
+def cmd_obsidian_relate(args: argparse.Namespace) -> int:
+    """Show — and optionally write — the links an existing note would get.
+
+    Dry by default. Thresholds are the kind of setting nobody gets right first time, and
+    trying one should not mean writing to the vault to find out.
+    """
+    vault, cfg = _require_vault()
+    if cfg.relate == "off":
+        die("Auto-linking is off.\n  Turn it on with: dejavu config relate search")
+
+    if args.start:
+        result = _start_linking(cfg, ask=sys.stdin.isatty())
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False))
+        elif result["started"]:
+            resolved = result["pending_resolved"]
+            noun = "note" if resolved == 1 else "notes"
+            tail = f" {resolved} {noun} that {'was' if resolved == 1 else 'were'} waiting "
+            tail = (tail + "is now linked." if resolved == 1 else tail + "are now linked.")
+            tail = tail if resolved else ""
+            print(f"✓ Ready.{tail}")
+        else:
+            print(f"  Not started: {result['reason']}")
+        return EXIT_OK if result["started"] else EXIT_ERROR
+
+    if args.pending:
+        waiting = relate.pending(cfg)
+        if args.json:
+            print(json.dumps({"pending": waiting}, ensure_ascii=False, indent=2))
+            return EXIT_OK
+        if not waiting:
+            print("Nothing is waiting.")
+            return EXIT_OK
+        noun = "note is" if len(waiting) == 1 else "notes are"
+        print(f"{len(waiting)} {noun} waiting to be linked:")
+        for row in waiting:
+            print(f"  {row['rel_path']}  ({row['reason']}, tried {row['attempts']}×)")
+        print("\n  Add them now with: dejavu obsidian relate --start")
+        return EXIT_OK
+
+    if args.backfill or args.rebuild:
+        return _run_backfill(cfg, rebuild=args.rebuild, as_json=args.json)
+
+    if not args.title:
+        die(
+            "Pass the title of a note, or one of --start / --pending / --backfill.\n"
+            "  dejavu obsidian relate --help"
+        )
+
+    path = obsidian.find_note(vault, args.title)
+    if path is None:
+        die(f"No note found for: {args.title}")
+        raise AssertionError  # pragma: no cover
+
+    mode, _ = obsidian.effective_write_mode(vault, cfg.write_mode)
+    text = path.read_text(encoding="utf-8")
+    raw, body = obsidian.split_frontmatter(text)
+    fields = obsidian.parse_frontmatter(raw)
+    tags = fields.get("tags")
+    keywords = [str(t).lstrip("#") for t in tags] if isinstance(tags, list) else None
+    clean = relate.strip_related_block(body)
+    title, clean_body = obsidian.split_title(clean, path)
+
+    if args.write:
+        links = relate.apply_to_existing(cfg, path, vault=vault, mode=mode)
+    else:
+        cands = relate._candidates(
+            cfg,
+            title=title,
+            keywords=keywords,
+            body=clean_body,
+            exclude_paths={path.relative_to(vault).as_posix()},
+            exclude_targets=relate.linked_targets(clean),
+        )
+        links = relate.format_links(
+            cands, ambiguous=relate._ambiguous_stems(scope_mod.obsidian_scope())
+        )
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "file": path.relative_to(vault).as_posix(),
+                    "related": links,
+                    "written": bool(args.write),
+                },
+                ensure_ascii=False,
+            )
+        )
+        return EXIT_OK
+
+    print(f"{path.relative_to(vault).as_posix()}")
+    if not links:
+        print("  Nothing close enough to link to.")
+        return EXIT_OK
+    for wikilink in links:
+        print(f"  {wikilink}")
+    if not args.write:
+        print("\n  Nothing was written. Add --write to apply.")
+    return EXIT_OK
+
+
+def cmd_obsidian_link(args: argparse.Namespace) -> int:
+    """The one command that edits notes the user wrote. See `link.py` for why that is safe."""
+    vault, cfg = _require_vault()
+
+    if args.history:
+        found = link.runs(cfg)
+        if args.json:
+            print(json.dumps(found, ensure_ascii=False, indent=2))
+            return EXIT_OK
+        if not found:
+            print("No links have been added yet.")
+            return EXIT_OK
+        for manifest in found:
+            links = sum(len(f["links_added"]) for f in manifest["files"])
+            state = "  (undone)" if manifest.get("reverted_at") else ""
+            print(
+                f"  {manifest['run']}   {manifest['command']}\n"
+                f"      {len(manifest['files'])} notes, {links} links{state}"
+            )
+        print("\n  Undo the last one:  dejavu obsidian link --remove")
+        print(f"  Copies of the originals:  {link.backup_root(cfg)}")
+        return EXIT_OK
+
+    try:
+        if args.remove or args.restore:
+            result = (
+                link.remove(cfg, args.run)
+                if args.remove
+                else link.restore(cfg, args.run, force=args.force)
+            )
+            if args.json:
+                print(json.dumps(result, ensure_ascii=False))
+            elif args.remove:
+                print(f"✓ Took the added links back out of {result['cleaned']} notes.")
+            else:
+                print(f"✓ Put {result['restored']} notes back as they were.")
+            return EXIT_OK
+
+        folder = None if args.all else args.folder
+        if folder is None and not args.all:
+            die("Say which folder, or pass --all for the whole vault.")
+
+        if args.apply:
+            if not args.plan_id:
+                die("Run it with --plan first, then pass the --plan-id it gives you.")
+            bar = progress.Progress()
+            bar.step("Adding the links")
+            result = link.apply(
+                cfg, args.plan_id, progress=lambda done, total: bar.tick(f"{done} / {total}")
+            )
+            bar.done()
+            obsidian.sync_vault(cfg, force=True)
+            if args.json:
+                print(json.dumps(result, ensure_ascii=False))
+                return EXIT_OK
+            if not result["run"]:
+                print("Nothing to do.")
+                return EXIT_OK
+            print(f"✓ Added {result['links']} links across {result['notes']} notes.")
+            if result["renamed"]:
+                print(f"  Renamed {result['renamed']} .txt files to .md.")
+            if result["skipped"]:
+                print(f"  Skipped {len(result['skipped'])} notes that changed since the plan.")
+            print("\n  Undo:  dejavu obsidian link --remove")
+            print(f"  Copies of the originals:  {result['backup']}")
+            return EXIT_OK
+
+        bar = progress.Progress()
+        bar.step("Reading the notes")
+        made = link.plan(cfg, folder, progress=lambda done, total: bar.tick(f"{done} / {total}"))
+        bar.done()
+    except (link.LinkRefused, relate.OllamaUnavailable) as exc:
+        die(str(exc))
+        raise AssertionError from exc  # pragma: no cover
+
+    if args.json:
+        print(json.dumps(made.as_dict(), ensure_ascii=False, indent=2))
+        return EXIT_OK
+
+    where = made.folder if made.folder != "." else "the vault"
+    if not made.files and not made.renames:
+        print(f"Nothing in {where} is close enough to anything else to link.")
+        return EXIT_OK
+
+    print(f"{where}: {len(made.files)} notes\n")
+    print(f"  {made.link_count} links would be added")
+    print(f"  {len(made.files)} notes would be changed, {made.handwritten} of them yours")
+    if made.renames:
+        print(f"  {len(made.renames)} .txt files would be renamed to .md")
+    if made.hubs:
+        print(f"  {len(made.hubs)} notes were left out for resembling almost everything:")
+        for path in made.hubs[:3]:
+            print(f"      {path}")
+    print("\n  The originals are copied first, and this can be undone.")
+    print(f"\n  Go ahead:  dejavu obsidian link {args.folder or '--all'} "
+          f"--apply --plan-id {made.plan_id}")
     return EXIT_OK
 
 
@@ -909,22 +1274,30 @@ def cmd_obsidian_add(args: argparse.Namespace) -> int:
     base = vault / cfg.knowledge_dir
     mode, reason = obsidian.effective_write_mode(vault, cfg.write_mode)
     existing = obsidian.find_note(base, args.title)
+    tags = store.normalize_keywords(args.tags)
 
     try:
         if existing is not None and args.replace:
             obsidian.replace_body(existing, body, mode=mode)
             path, verb = existing, "Replaced"
+            links = relate.apply_to_existing(cfg, path, vault=vault, mode=mode)
         elif existing is not None:
             obsidian.append_to_note(existing, body)
             path, verb = existing, "Appended to"
+            links = relate.apply_to_existing(cfg, path, vault=vault, mode=mode)
         else:
+            # Worked out before the file exists so the links can ride along in the
+            # frontmatter create_note is already writing.
+            links = relate.suggest_for_new(cfg, title=args.title, body=body, keywords=tags)
             path = obsidian.create_note(
                 obsidian._category_dir(base, args.category),
                 args.title,
                 body,
                 category=args.category,
-                tags=store.normalize_keywords(args.tags),
+                tags=tags,
                 project=args.project,
+                related=links,
+                related_key=cfg.relate_key,
             )
             verb = "Wrote"
     except obsidian.WriteRefused as exc:
@@ -932,11 +1305,24 @@ def cmd_obsidian_add(args: argparse.Namespace) -> int:
         raise AssertionError from exc  # pragma: no cover
 
     obsidian.sync_vault(cfg, force=True)
+    # After the sync, so the note has an index row for the vector to hang off.
+    stored = relate.remember(cfg, path, vault=vault)
+    relate.catch_up(cfg)
     rel = path.relative_to(vault)
     if args.json:
-        print(json.dumps({"file": rel.as_posix(), "action": verb.lower()}, ensure_ascii=False))
+        print(
+            json.dumps(
+                {"file": rel.as_posix(), "action": verb.lower(), "related": links},
+                ensure_ascii=False,
+            )
+        )
     else:
         print(f"✓ {verb} {rel.as_posix()}  ({mode})")
+        if links:
+            print(f"  Linked to {', '.join(links)}")
+        elif stored == "deferred":
+            print("  Links are on hold until the linking model is running.")
+            print("  Add them with: dejavu obsidian relate --start")
     return EXIT_OK
 
 
@@ -954,21 +1340,29 @@ def cmd_research(args: argparse.Namespace) -> int:
         die("No project could be inferred. Pass --project <name>.")
 
     day = datetime.now().astimezone().strftime("%Y-%m-%d")
+    tags = store.normalize_keywords(args.tags)
+    links = relate.suggest_for_new(cfg, title=args.title, body=body, keywords=tags)
     path = obsidian.create_note(
         vault / cfg.research_dir / project,
         args.title,
         body,
-        tags=store.normalize_keywords(args.tags),
+        tags=tags,
         project=project,
         filename=f"{day}-{obsidian.slugify(args.title)}",
+        related=links,
+        related_key=cfg.relate_key,
     )
     obsidian.sync_vault(cfg, force=True)
+    relate.remember(cfg, path, vault=vault)
+    relate.catch_up(cfg)
 
     rel = path.relative_to(vault).as_posix()
     if args.json:
-        print(json.dumps({"file": rel, "project": project}, ensure_ascii=False))
+        print(json.dumps({"file": rel, "project": project, "related": links}, ensure_ascii=False))
     else:
         print(f"✓ Wrote {rel}")
+        if links:
+            print(f"  Linked to {', '.join(links)}")
     return EXIT_OK
 
 
@@ -984,6 +1378,18 @@ def cmd_config(args: argparse.Namespace) -> int:
         "write_mode": cfg.write_mode,
         "research": cfg.research,
         "promote": cfg.promote,
+        "relate": cfg.relate,
+        "relate_key": cfg.relate_key,
+        "relate_top_k": str(cfg.relate_top_k),
+        "relate_min_chars": str(cfg.relate_min_chars),
+        "relate_model": cfg.relate_model,
+        "relate_host": cfg.relate_host,
+        "relate_min_sim": str(cfg.relate_min_sim),
+        "relate_autostart": cfg.relate_autostart,
+        "relate_keep_alive": cfg.relate_keep_alive,
+        "relate_defer_days": str(cfg.relate_defer_days),
+        "link_keep_runs": str(cfg.link_keep_runs),
+        "link_keep_days": str(cfg.link_keep_days),
     }
 
     if args.key is None:
@@ -1002,6 +1408,15 @@ def cmd_config(args: argparse.Namespace) -> int:
     allowed = scope_mod.OBSIDIAN_CHOICES.get(args.key)
     if allowed and args.value not in allowed:
         die(f"Invalid value for {args.key}: {args.value} (expected one of: {', '.join(allowed)})")
+    if args.key in scope_mod.OBSIDIAN_INT_DEFAULTS and not args.value.isdigit():
+        die(f"Invalid value for {args.key}: {args.value} (expected a positive whole number)")
+    if args.key in scope_mod.OBSIDIAN_FLOAT_DEFAULTS:
+        try:
+            number = float(args.value)
+        except ValueError:
+            number = -1.0
+        if not 0.0 <= number <= 1.0:
+            die(f"Invalid value for {args.key}: {args.value} (expected a number from 0 to 1)")
 
     scope_mod.set_config_value(path, "obsidian", args.key, args.value)
     print(f"✓ {args.key} = {args.value}")
@@ -1157,6 +1572,53 @@ def build_parser() -> argparse.ArgumentParser:
     osp.add_argument("--vault", help="check a different vault without changing the config")
     add_json(osp)
     osp.set_defaults(func=cmd_obsidian_doctor)
+
+    osp = obs.add_parser("relate", help="show the links a note would get (writes nothing)")
+    osp.add_argument("title", nargs="?", help="title of an existing note in the vault")
+    osp.add_argument("--write", action="store_true", help="actually write the links")
+    osp.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="the default; accepted so it can be stated explicitly",
+    )
+    osp.add_argument(
+        "--backfill",
+        action="store_true",
+        help="embed every note that does not have a current vector (relate = embed)",
+    )
+    osp.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="discard every stored vector first, then backfill",
+    )
+    osp.add_argument(
+        "--start",
+        action="store_true",
+        help="start the linking model and add the links that were waiting",
+    )
+    osp.add_argument(
+        "--pending",
+        action="store_true",
+        help="list the notes still waiting to be linked",
+    )
+    add_json(osp)
+    osp.set_defaults(func=cmd_obsidian_relate)
+
+    osp = obs.add_parser(
+        "link", help="link notes in a folder to each other (edits notes you wrote)"
+    )
+    osp.add_argument("folder", nargs="?", help="folder inside the vault")
+    osp.add_argument("--all", action="store_true", help="the whole vault")
+    osp.add_argument("--plan", action="store_true", help="the default; show what would change")
+    osp.add_argument("--apply", action="store_true", help="carry out a plan")
+    osp.add_argument("--plan-id", dest="plan_id", help="the id printed by --plan")
+    osp.add_argument("--history", action="store_true", help="past runs")
+    osp.add_argument("--remove", action="store_true", help="take the added links back out")
+    osp.add_argument("--restore", action="store_true", help="put the files back as they were")
+    osp.add_argument("--run", help="which run to undo (default: the last one)")
+    osp.add_argument("--force", action="store_true", help="restore even over later edits")
+    add_json(osp)
+    osp.set_defaults(func=cmd_obsidian_link)
 
     osp = obs.add_parser("add", help="write a note into the vault's Knowledge folder")
     osp.add_argument("title")

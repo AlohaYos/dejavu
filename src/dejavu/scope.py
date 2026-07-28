@@ -262,6 +262,18 @@ class ObsidianConfig:
     write_mode: str  # auto | full | append-only
     research: str  # all | findings | manual
     promote: str  # ask | always | never
+    relate: str  # off | search | embed
+    relate_key: str
+    relate_top_k: int
+    relate_min_chars: int
+    relate_model: str
+    relate_host: str
+    relate_min_sim: float
+    relate_autostart: str  # ask | always | never
+    relate_keep_alive: str
+    relate_defer_days: int
+    link_keep_runs: int
+    link_keep_days: int
 
     @property
     def enabled(self) -> bool:
@@ -275,11 +287,37 @@ OBSIDIAN_DEFAULTS: dict[str, str] = {
     "write_mode": "auto",
     "research": "findings",
     "promote": "ask",
+    "relate": "off",
+    "relate_key": "related",
+    "relate_model": "bge-m3",
+    "relate_host": "http://localhost:11434",
+    "relate_autostart": "ask",
+    # Sent with every request rather than exported as OLLAMA_KEEP_ALIVE: an environment
+    # variable would have to be made persistent somewhere on the user's machine, and a
+    # change left behind is a change someone has to be told how to undo.
+    "relate_keep_alive": "24h",
+}
+OBSIDIAN_INT_DEFAULTS: dict[str, int] = {
+    "relate_top_k": 5,
+    "relate_min_chars": 40,
+    "relate_defer_days": 7,
+    "link_keep_runs": 10,
+    "link_keep_days": 30,
+}
+OBSIDIAN_FLOAT_DEFAULTS: dict[str, float] = {
+    # Settled by running it over two real vaults rather than by reasoning about it. At
+    # 0.6 a 500-note vault filled `relate_top_k` for almost every note, which means the
+    # cap was choosing the links rather than the similarity. 0.65 leaves both a small
+    # folder of technical articles and a large pile of personal notes at a density where
+    # the score is doing the work.
+    "relate_min_sim": 0.65,
 }
 OBSIDIAN_CHOICES: dict[str, tuple[str, ...]] = {
     "write_mode": ("auto", "full", "append-only"),
     "research": ("all", "findings", "manual"),
     "promote": ("ask", "always", "never"),
+    "relate": ("off", "search", "embed"),
+    "relate_autostart": ("ask", "always", "never"),
 }
 
 
@@ -298,6 +336,24 @@ def obsidian_config(config_file: Path | None = None) -> ObsidianConfig:
         allowed = OBSIDIAN_CHOICES.get(key)
         return text if allowed is None or text in allowed else OBSIDIAN_DEFAULTS[key]
 
+    def pick_int(key: str) -> int:
+        """Fall back to the default rather than raising: a typo in config.toml must not
+        stop dejavu from saving a note."""
+        value = section.get(key)
+        try:
+            number = int(str(value))
+        except (TypeError, ValueError):
+            return OBSIDIAN_INT_DEFAULTS[key]
+        return number if number > 0 else OBSIDIAN_INT_DEFAULTS[key]
+
+    def pick_float(key: str) -> float:
+        value = section.get(key)
+        try:
+            number = float(str(value))
+        except (TypeError, ValueError):
+            return OBSIDIAN_FLOAT_DEFAULTS[key]
+        return number if 0.0 <= number <= 1.0 else OBSIDIAN_FLOAT_DEFAULTS[key]
+
     cfg = ObsidianConfig(
         vault=vault,
         include=include,
@@ -307,6 +363,18 @@ def obsidian_config(config_file: Path | None = None) -> ObsidianConfig:
         write_mode=pick("write_mode"),
         research=pick("research"),
         promote=pick("promote"),
+        relate=pick("relate"),
+        relate_key=pick("relate_key"),
+        relate_top_k=pick_int("relate_top_k"),
+        relate_min_chars=pick_int("relate_min_chars"),
+        relate_model=pick("relate_model"),
+        relate_host=pick("relate_host"),
+        relate_min_sim=pick_float("relate_min_sim"),
+        relate_autostart=pick("relate_autostart"),
+        relate_keep_alive=pick("relate_keep_alive"),
+        relate_defer_days=pick_int("relate_defer_days"),
+        link_keep_runs=pick_int("link_keep_runs"),
+        link_keep_days=pick_int("link_keep_days"),
     )
     if not cfg.include:
         cfg = replace(

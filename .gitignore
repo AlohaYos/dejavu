@@ -16,3 +16,8 @@ build/
 .dejavu/knowledge.db-*
 docs/DEVELOPING.md
 docs/RELEASING*.md
+
+# dejavu has no runtime dependencies, so this only pins the dev tools (pytest, ruff).
+# Not tracked: it would be the only thing forcing a particular resolver version on
+# anyone who clones this.
+uv.lock

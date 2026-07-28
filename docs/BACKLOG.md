@@ -80,7 +80,7 @@ Source: https://fatbobman.com/en/posts/xcode-263-claude/ (third-party; verify be
 
 ---
 
-## Obsidian integration — `done` (v0.4.0)
+## Obsidian integration — `done` (v0.4.0, linking in v0.5.0)
 
 Shipped. `src/dejavu/obsidian.py`, set up with `dejavu obsidian init <vault>`.
 
@@ -105,10 +105,19 @@ existing notes are provably untouchable. Frontmatter edits splice single lines r
 re-serialising the block, so keys dejavu knows nothing about (an `autolink:` list written
 by an embedding script, say) survive.
 
-**Still open:** `dejavu obsidian relate` — embedding-based links between notes. Needs
-Ollama, therefore a network call to localhost and a model download, therefore it cannot
-live in the core. Ship it as a separate command that fails with an explanation when Ollama
-is absent, and never let the README imply the core needs it.
+**Done in v0.5.0:** linking notes to each other, in `relate.py`. It turned out not to need
+a separate command after all. The trigger is the write path that already existed
+(`create_note` / `append_to_note`), and Ollama is reached with `urllib` alone, so the
+dependency count did not move. What made it fit in the core is the degradation rule:
+`embed` falls back to `search` — the three-tier index search — whenever Ollama is missing,
+so the feature is never the reason a note fails to save, and the README's "no network
+needed" promise stays true for everyone who does not turn it on.
+
+**Also done in v0.5.0:** `dejavu obsidian link` — bulk linking across a folder, including
+notes the user wrote. It is the only feature that writes to a note without
+`source: dejavu`, and it earns that by being reversible rather than by asking twice:
+additions are fenced in HTML comments, every file is copied before any is written, and the
+manifest records the post-write hash so a restore can refuse to discard a later edit.
 
 **Also open:** migrating what is already stored. The user scope holds a handful of entries
 that are really user-level knowledge, and project databases hold general findings
