@@ -288,7 +288,12 @@ OBSIDIAN_TOOLS: list[dict[str, Any]] = [
                 "body": {"type": "string"},
                 "category": {
                     "type": "string",
-                    "description": "Subfolder of Knowledge/, used only if it already exists.",
+                    "description": (
+                        "Subfolder of Knowledge/, used only if it already exists. Pass one "
+                        "of the names from `knowledge_folders` in obsidian_status, spelled "
+                        "exactly as it appears there — a name that matches nothing lands in "
+                        "the catch-all folder instead of where it belongs."
+                    ),
                 },
                 "tags": {"type": "array", "items": {"type": "string"}},
                 "project": {"type": "string", "description": "Where this was learned."},
@@ -528,7 +533,9 @@ def call_tool(name: str, args: dict[str, Any]) -> dict:
             else:
                 links = relate.suggest_for_new(cfg, title=args["title"], body=body, keywords=tags)
                 path = obsidian.create_note(
-                    obsidian._category_dir(base, args.get("category")),
+                    obsidian._category_dir(
+                        base, args.get("category"), cfg.knowledge_other_dir
+                    ),
                     args["title"],
                     body,
                     category=args.get("category"),
@@ -650,6 +657,11 @@ def call_tool(name: str, args: dict[str, Any]) -> dict:
             "write_mode": mode,
             "reason": reason,
             "by_folder": {f: obsidian.count_in_folder(scope, f) for f in cfg.include},
+            # The subfolders of Knowledge/, so `category` can be given a name that exists
+            # rather than one that seems reasonable. A guess that matches nothing puts the
+            # note in the catch-all, which is safe but not where it belongs.
+            "knowledge_folders": obsidian.subfolders(cfg.vault / cfg.knowledge_dir),
+            "catch_all_folder": cfg.knowledge_other_dir,
             "research": cfg.research,
             "promote": cfg.promote,
             "relate": cfg.relate,

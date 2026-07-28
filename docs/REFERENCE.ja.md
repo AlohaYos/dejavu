@@ -159,6 +159,7 @@ note       = 14
 vault         = "~/Documents/MyVault"
 include       = ["Knowledge", "UserInfo", "Research"]
 knowledge_dir = "Knowledge"
+knowledge_other_dir = "Other"
 userinfo_dir  = "UserInfo"
 research_dir  = "Research"
 write_mode    = "auto"       # auto | full | append-only
@@ -181,6 +182,7 @@ relate_defer_days = 7
 | `vault` | vault のパス。**未設定なら Obsidian 連携は完全に無効** |
 | `include` | インデックスと書き込みの対象フォルダ。ここに無いフォルダは見えません |
 | `knowledge_dir` | 汎用知識の置き場 |
+| `knowledge_other_dir` | 分類できないメモの受け皿（既定 `Other`。**あれば使う**） |
 | `userinfo_dir` | あなた自身の情報の置き場 |
 | `research_dir` | 調査履歴の置き場（この下にプロジェクト別のフォルダができます） |
 | `write_mode` | 後述 |
@@ -267,6 +269,22 @@ safeAreaInsets.bottom が 0 になる。
 dejavu がノートに追記したあと、そのまま残ります。frontmatter を作り直すのではなく、
 必要な行だけを差し替えているからです。
 
+### 分類できないメモの行き先
+
+`Knowledge/` にサブフォルダを作っている場合、**どのフォルダにも当てはまらないメモは
+`Other/` に入ります**（`knowledge_other_dir` で名前を変更可、既定 `Other`）。
+
+これが無いと、分類できないメモが `Knowledge/` 直下に溜まり続け、せっかく作った
+サブフォルダが埋もれて見えなくなります。
+
+**このフォルダも dejavu は自分で作りません。** 作った場合だけ受け皿として使います。
+フラットに使いたい人の vault に、勝手にフォルダが生えることはありません。
+`dejavu obsidian init --preset dev` は最初から `Other/` を含めて作ります。
+
+MCP の `obsidian_status` は `knowledge_folders` として `Knowledge/` のサブフォルダ名を
+返します。Claude はこの一覧から選ぶので、**「Patterns」フォルダがあるのに `pattern` と
+渡して受け皿に落ちる**、といった取りこぼしが起きにくくなります。
+
 ### ノートの名前
 
 検索結果やリンクに出るノートの名前は、次のように決まります。
@@ -294,7 +312,7 @@ dejavu の分類を押し付けない設計です。
 
 ```bash
 dejavu obsidian init <vault> --preset dev
-# → Knowledge/ に API/ Architecture/ Patterns/ Tools/ を作る
+# → Knowledge/ に API/ Architecture/ Patterns/ Tools/ Other/ を作る
 ```
 
 ---

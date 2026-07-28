@@ -257,6 +257,7 @@ class ObsidianConfig:
     vault: Path | None
     include: list[str]
     knowledge_dir: str
+    knowledge_other_dir: str
     userinfo_dir: str
     research_dir: str
     write_mode: str  # auto | full | append-only
@@ -282,6 +283,7 @@ class ObsidianConfig:
 
 OBSIDIAN_DEFAULTS: dict[str, str] = {
     "knowledge_dir": "Knowledge",
+    "knowledge_other_dir": "Other",
     "userinfo_dir": "UserInfo",
     "research_dir": "Research",
     "write_mode": "auto",
@@ -358,6 +360,7 @@ def obsidian_config(config_file: Path | None = None) -> ObsidianConfig:
         vault=vault,
         include=include,
         knowledge_dir=pick("knowledge_dir"),
+        knowledge_other_dir=pick("knowledge_other_dir"),
         userinfo_dir=pick("userinfo_dir"),
         research_dir=pick("research_dir"),
         write_mode=pick("write_mode"),

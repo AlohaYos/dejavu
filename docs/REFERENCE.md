@@ -160,6 +160,7 @@ note       = 14
 vault         = "~/Documents/MyVault"
 include       = ["Knowledge", "UserInfo", "Research"]
 knowledge_dir = "Knowledge"
+knowledge_other_dir = "Other"
 userinfo_dir  = "UserInfo"
 research_dir  = "Research"
 write_mode    = "auto"       # auto | full | append-only
@@ -182,6 +183,7 @@ relate_defer_days = 7
 | `vault` | Path to the vault. **Unset means the integration is entirely off** |
 | `include` | Folders that are indexed and written to. Anything else is invisible |
 | `knowledge_dir` | Where cross-project knowledge goes |
+| `knowledge_other_dir` | Catch-all for notes fitting nowhere (default `Other`; **used only if it exists**) |
 | `userinfo_dir` | Where your own information goes |
 | `research_dir` | Where investigations go (one subfolder per project) |
 | `write_mode` | See below |
@@ -269,6 +271,22 @@ safeAreaInsets.bottom reads as 0.
 script survives an append untouched, because frontmatter edits splice individual lines
 rather than re-serialising the block.
 
+### Where notes that fit nowhere go
+
+When `Knowledge/` has subfolders, **a note matching none of them goes to `Other/`**
+(renameable with `knowledge_other_dir`, default `Other`).
+
+Without it, the notes that fit nowhere collect directly in `Knowledge/` until the folders
+you made are lost among them.
+
+**dejavu does not create this folder either.** It is used only if you make it, so a vault
+kept deliberately flat stays flat. `dejavu obsidian init --preset dev` creates `Other/`
+along with the rest.
+
+The MCP `obsidian_status` reports the subfolders of `Knowledge/` as `knowledge_folders`,
+so Claude picks from names that exist rather than passing `pattern` at a folder called
+`Patterns` and quietly landing in the catch-all.
+
 ### What a note is called
 
 The name that appears in search results and in links is decided like this.
@@ -296,7 +314,7 @@ If you want a starting point for code work:
 
 ```bash
 dejavu obsidian init <vault> --preset dev
-# → creates API/ Architecture/ Patterns/ Tools/ under Knowledge/
+# → creates API/ Architecture/ Patterns/ Tools/ Other/ under Knowledge/
 ```
 
 ---

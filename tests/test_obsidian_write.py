@@ -196,3 +196,56 @@ def test_body_replacement_keeps_frontmatter_and_honours_the_mtime_guard(tmp_path
 
     with pytest.raises(obsidian.WriteRefused, match="changed on disk"):
         obsidian.replace_body(note, "さらに別の本文", mode="full", expected_mtime_ns=stamp - 1)
+
+
+# ---------------------------------------------------------------- the catch-all folder
+
+
+def test_a_matching_folder_still_wins(vault: Path):
+    (vault / "Knowledge/API").mkdir()
+    (vault / "Knowledge/Other").mkdir()
+
+    chosen = obsidian._category_dir(vault / "Knowledge", "api", "Other")
+
+    assert chosen == vault / "Knowledge/API"
+
+
+def test_a_note_matching_nothing_goes_to_the_catch_all(vault: Path):
+    """Otherwise loose notes pile up beside the folders until the folders are invisible."""
+    (vault / "Knowledge/API").mkdir()
+    (vault / "Knowledge/Other").mkdir()
+
+    chosen = obsidian._category_dir(vault / "Knowledge", "Patterns", "Other")
+
+    assert chosen == vault / "Knowledge/Other"
+
+
+def test_a_note_with_no_category_goes_to_the_catch_all(vault: Path):
+    (vault / "Knowledge/Other").mkdir()
+
+    chosen = obsidian._category_dir(vault / "Knowledge", None, "Other")
+
+    assert chosen == vault / "Knowledge/Other"
+
+
+def test_without_the_folder_nothing_changes(vault: Path):
+    """A vault kept deliberately flat must stay flat: dejavu never makes the folder."""
+    chosen = obsidian._category_dir(vault / "Knowledge", "Patterns", "Other")
+
+    assert chosen == vault / "Knowledge"
+
+
+def test_the_catch_all_can_be_named_anything(vault: Path):
+    (vault / "Knowledge/未分類").mkdir()
+
+    chosen = obsidian._category_dir(vault / "Knowledge", "Patterns", "未分類")
+
+    assert chosen == vault / "Knowledge/未分類"
+
+
+def test_subfolders_are_listed_for_the_caller_to_choose_from(vault: Path):
+    (vault / "Knowledge/API").mkdir()
+    (vault / "Knowledge/Other").mkdir()
+    (vault / "Knowledge/.hidden").mkdir()
+
+    assert obsidian.subfolders(vault / "Knowledge") == ["API", "Other"]

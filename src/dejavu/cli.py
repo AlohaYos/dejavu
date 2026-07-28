@@ -755,13 +755,16 @@ def cmd_stats(args: argparse.Namespace) -> int:
 
 PRESETS: dict[str, list[str]] = {
     "none": [],
-    "dev": ["API", "Architecture", "Patterns", "Tools"],
+    # "Other" is the catch-all: without somewhere to put a note that fits none of the
+    # rest, the loose ones pile up beside these folders and bury them.
+    "dev": ["API", "Architecture", "Patterns", "Tools", "Other"],
 }
 
 CONFIG_KEYS = (
     "vault",
     "include",
     "knowledge_dir",
+    "knowledge_other_dir",
     "userinfo_dir",
     "research_dir",
     "write_mode",
@@ -1290,7 +1293,7 @@ def cmd_obsidian_add(args: argparse.Namespace) -> int:
             # frontmatter create_note is already writing.
             links = relate.suggest_for_new(cfg, title=args.title, body=body, keywords=tags)
             path = obsidian.create_note(
-                obsidian._category_dir(base, args.category),
+                obsidian._category_dir(base, args.category, cfg.knowledge_other_dir),
                 args.title,
                 body,
                 category=args.category,
@@ -1373,6 +1376,7 @@ def cmd_config(args: argparse.Namespace) -> int:
         "vault": str(cfg.vault) if cfg.vault else "",
         "include": ", ".join(cfg.include),
         "knowledge_dir": cfg.knowledge_dir,
+        "knowledge_other_dir": cfg.knowledge_other_dir,
         "userinfo_dir": cfg.userinfo_dir,
         "research_dir": cfg.research_dir,
         "write_mode": cfg.write_mode,
@@ -1623,7 +1627,10 @@ def build_parser() -> argparse.ArgumentParser:
     osp = obs.add_parser("add", help="write a note into the vault's Knowledge folder")
     osp.add_argument("title")
     osp.add_argument("--body", help="body text; '-' or omitted reads from stdin")
-    osp.add_argument("--category", help="a subfolder of Knowledge/, used only if it exists")
+    osp.add_argument(
+        "--category",
+        help="a subfolder of Knowledge/, used only if it exists (otherwise the catch-all)",
+    )
     osp.add_argument("--tags", help="comma-separated; written to the note's frontmatter")
     osp.add_argument("--project", help="the project this was learned in")
     osp.add_argument(

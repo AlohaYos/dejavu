@@ -309,18 +309,39 @@ def _unique(path: Path) -> Path:
     raise WriteRefused(f"Too many notes named like {path.name}")
 
 
-def _category_dir(base: Path, category: str | None) -> Path:
+def subfolders(base: Path) -> list[str]:
+    """Folder names directly under `base`, so callers can pick one that exists."""
+    if not base.is_dir():
+        return []
+    return sorted(c.name for c in base.iterdir() if c.is_dir() and not c.name.startswith("."))
+
+
+def _find_child(base: Path, name: str) -> Path | None:
+    wanted = name.strip().lower()
+    for child in sorted(base.iterdir()):
+        if child.is_dir() and child.name.lower() == wanted:
+            return child
+    return None
+
+
+def _category_dir(base: Path, category: str | None, other: str = "") -> Path:
     """Use a subfolder only when the user already made one.
 
     Vault layouts are personal — PARA, Zettelkasten, a flat pile. Inventing folders would
     impose dejavu's taxonomy on a vault the user has already organised their own way.
+
+    `other` is the catch-all for notes that match no folder. Without it, a vault whose
+    owner has sorted their knowledge into folders slowly accumulates loose notes beside
+    those folders, until the folders are hard to see at all. It is used only when a folder
+    by that name already exists, which keeps the rule above intact: someone who wants a
+    flat pile does not make the folder and nothing changes for them.
     """
-    if not category or not base.is_dir():
+    if not base.is_dir():
         return base
-    wanted = category.strip().lower()
-    for child in sorted(base.iterdir()):
-        if child.is_dir() and child.name.lower() == wanted:
-            return child
+    if category and (found := _find_child(base, category)) is not None:
+        return found
+    if other and (fallback := _find_child(base, other)) is not None:
+        return fallback
     return base
 
 
