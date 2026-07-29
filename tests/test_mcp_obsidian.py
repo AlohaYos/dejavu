@@ -97,6 +97,26 @@ def test_a_second_call_with_the_same_title_appends_instead_of_duplicating(connec
     assert len(list((connected / "Knowledge").glob("*.md"))) == 1
 
 
+def test_a_nested_folder_is_offered_and_can_be_written_to(connected: Path):
+    """A vault that groups by project needs the note in Job/dejavu, not loose in Job."""
+    (connected / "Knowledge/Job/dejavu").mkdir(parents=True)
+
+    status = _payload(_call("obsidian_status"))
+    assert "Job/dejavu" in status["knowledge_folders"]
+
+    payload = _payload(
+        _call(
+            "add_obsidian_knowledge",
+            title="include が黙って無視される",
+            body="書き込みは文字列、読み込みは list しか受け付けない。",
+            category="Job/dejavu",
+        )
+    )
+
+    assert payload["file"] == "Knowledge/Job/dejavu/include が黙って無視される.md"
+    assert (connected / payload["file"]).exists()
+
+
 def test_a_note_the_user_wrote_is_never_touched(connected: Path):
     original = "---\ntags: [hawaii]\n---\n\n# 手書きのメモ\n\n人間が書いた。\n"
     write_note(connected, "Knowledge/手書きのメモ.md", original)

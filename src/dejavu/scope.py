@@ -386,6 +386,26 @@ def obsidian_config(config_file: Path | None = None) -> ObsidianConfig:
     return cfg
 
 
+def project_memory(start: Path | None = None) -> str | None:
+    """The vault subfolder (under knowledge_dir) this project uses as its external memory.
+
+    Stored per-project in .dejavu/config.toml as `[obsidian] memory`, not in the user
+    config: it names *this repository's* shelf in the vault, so it travels with the repo
+    — a teammate who clones it files notes to the same folder (their vault path is still
+    their own, set in the user config). A path relative to knowledge_dir, so it may be
+    nested, e.g. "Job/dejavu". Returns None when the project has not set one.
+    """
+    root = find_project_root(start)
+    if root is None:
+        return None
+    section = load_config(root / DEJAVU_DIR / CONFIG_NAME).get("obsidian", {})
+    value = section.get("memory")
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip().strip("/").strip()
+    return cleaned or None
+
+
 def obsidian_scope() -> Scope:
     """Read-only index of the Obsidian vault. A separate file from knowledge.db.
 

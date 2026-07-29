@@ -309,11 +309,34 @@ def _unique(path: Path) -> Path:
     raise WriteRefused(f"Too many notes named like {path.name}")
 
 
-def subfolders(base: Path) -> list[str]:
-    """Folder names directly under `base`, so callers can pick one that exists."""
+CATEGORY_DEPTH = 2
+
+
+def subfolders(base: Path, *, depth: int = CATEGORY_DEPTH) -> list[str]:
+    """Folder paths under `base`, so callers can pick one that exists.
+
+    Nested paths are listed as "Job/dejavu", not just "Job": a vault that groups notes
+    by project keeps the folder that actually describes a note one level further down,
+    and offering only the top level would make every project in it indistinguishable.
+
+    `depth` is bounded because this list is read by a model choosing where a note goes —
+    a deep vault would otherwise answer with a wall of paths, most of them irrelevant.
+    """
     if not base.is_dir():
         return []
-    return sorted(c.name for c in base.iterdir() if c.is_dir() and not c.name.startswith("."))
+    found: list[str] = []
+
+    def walk(directory: Path, prefix: str, level: int) -> None:
+        for child in sorted(directory.iterdir()):
+            if not child.is_dir() or child.name.startswith(".") or child.name in SKIP_DIRS:
+                continue
+            rel = f"{prefix}{child.name}"
+            found.append(rel)
+            if level < depth:
+                walk(child, f"{rel}/", level + 1)
+
+    walk(base, "", 1)
+    return found
 
 
 def _find_child(base: Path, name: str) -> Path | None:
@@ -335,11 +358,26 @@ def _category_dir(base: Path, category: str | None, other: str = "") -> Path:
     those folders, until the folders are hard to see at all. It is used only when a folder
     by that name already exists, which keeps the rule above intact: someone who wants a
     flat pile does not make the folder and nothing changes for them.
+
+    A category may name a nested folder — "Job/dejavu". Each segment is resolved in turn
+    and only against folders that already exist, so the rule above still holds at every
+    level. When a segment matches nothing the descent stops there rather than falling
+    back to the catch-all: for "Job/NewProject" in a vault that has Job/ but not
+    NewProject/, Job/ is where the note belongs, and Other/ is not.
     """
     if not base.is_dir():
         return base
-    if category and (found := _find_child(base, category)) is not None:
-        return found
+    # Only names of existing children are ever followed, so "..", "/" and "~" cannot
+    # escape `base` — they simply match nothing.
+    segments = [s for s in (category or "").replace("\\", "/").split("/") if s.strip()]
+    current = base
+    for segment in segments:
+        child = _find_child(current, segment)
+        if child is None:
+            break
+        current = child
+    if current != base:
+        return current
     if other and (fallback := _find_child(base, other)) is not None:
         return fallback
     return base

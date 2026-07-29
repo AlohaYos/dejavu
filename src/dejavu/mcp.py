@@ -264,9 +264,13 @@ OBSIDIAN_TOOLS: list[dict[str, Any]] = [
             "configured, which folders it holds, and the write mode: `append-only` means "
             "the vault syncs to other devices, so notes can be created and appended to but "
             "never rewritten. Also reports the `research` and `promote` policies the user "
-            "has chosen, which govern how eagerly you should be saving to the vault."
+            "has chosen, which govern how eagerly you should be saving to the vault, and "
+            "`project_memory`: the folder this project uses as its external memory, if set."
         ),
-        "inputSchema": {"type": "object", "properties": {}},
+        "inputSchema": {
+            "type": "object",
+            "properties": {"project_path": _PROJECT_PATH_SCHEMA},
+        },
     },
     {
         "name": "add_obsidian_knowledge",
@@ -276,8 +280,15 @@ OBSIDIAN_TOOLS: list[dict[str, Any]] = [
             "pitfall, a tool's real behaviour, the user's own working style. The test is "
             "'would this still be true in a different repository?'. If yes, it belongs "
             "here; if no, use add_knowledge with the project scope instead.\n"
-            "Notes land in the vault's Knowledge folder, and in a subfolder only when the "
-            "user has already created one by that name — never invent folders. An existing "
+            "The exception is `memory`: when the user says to save to this project's "
+            "external memory (they may call it '外部記憶', 'Obsidian', or '本棚'), pass "
+            "memory=true and the note goes to the project's own folder even though it is "
+            "project-specific — the user has chosen to keep that project's design docs, "
+            "TODOs and notes in the vault. `project_memory` in obsidian_status names the "
+            "folder.\n"
+            "Notes land in the vault's Knowledge folder, and in a subfolder — nested ones "
+            "included — only when the user has already created one by that name; never "
+            "invent folders. An existing "
             "note with the same title is appended to rather than duplicated. Notes the "
             "user wrote by hand are never modified."
         ),
@@ -292,7 +303,17 @@ OBSIDIAN_TOOLS: list[dict[str, Any]] = [
                         "Subfolder of Knowledge/, used only if it already exists. Pass one "
                         "of the names from `knowledge_folders` in obsidian_status, spelled "
                         "exactly as it appears there — a name that matches nothing lands in "
-                        "the catch-all folder instead of where it belongs."
+                        "the catch-all folder instead of where it belongs. Nested folders "
+                        "are listed and accepted as a path, `Job/dejavu`; prefer the most "
+                        "specific one that fits. Ignored when memory=true."
+                    ),
+                },
+                "memory": {
+                    "type": "boolean",
+                    "description": (
+                        "Write to this project's external memory folder (see "
+                        "`project_memory` in obsidian_status). Use when the user asks to "
+                        "save to the project's external memory / Obsidian / 本棚."
                     ),
                 },
                 "tags": {"type": "array", "items": {"type": "string"}},
@@ -478,6 +499,26 @@ def _refuse_secrets(title: str, body: str) -> None:
         )
 
 
+def _memory_category(vault: Path, cfg, project_path: str | None) -> str:
+    """This project's external memory folder, verified to exist. Raises with guidance."""
+    start = Path(project_path).expanduser() if project_path else None
+    mem = scope_mod.project_memory(start)
+    if not mem:
+        raise ValueError(
+            "This project has no external memory folder. Ask the user to run "
+            "`dejavu obsidian project <name>` to set one up."
+        )
+    base = vault / cfg.knowledge_dir
+    # `_category_dir` follows only existing folders and never escapes `base`; unchanged
+    # means the configured folder is gone.
+    if obsidian._category_dir(base, mem, "") == base:
+        raise ValueError(
+            f"The external memory folder {cfg.knowledge_dir}/{mem} is missing. Ask the "
+            f"user to run `dejavu obsidian project {mem}`."
+        )
+    return mem
+
+
 def _find(uid: str, scopes: list[Scope]):
     for scope in scopes:
         if not scope.db_path.exists():
@@ -521,6 +562,11 @@ def call_tool(name: str, args: dict[str, Any]) -> dict:
         vault, cfg = _vault()
         body = args.get("body", "")
         _refuse_secrets(args["title"], body)
+        category = (
+            _memory_category(vault, cfg, project_path)
+            if args.get("memory")
+            else args.get("category")
+        )
         base = vault / cfg.knowledge_dir
         mode, _ = obsidian.effective_write_mode(vault, cfg.write_mode)
         existing = obsidian.find_note(base, args["title"])
@@ -533,12 +579,10 @@ def call_tool(name: str, args: dict[str, Any]) -> dict:
             else:
                 links = relate.suggest_for_new(cfg, title=args["title"], body=body, keywords=tags)
                 path = obsidian.create_note(
-                    obsidian._category_dir(
-                        base, args.get("category"), cfg.knowledge_other_dir
-                    ),
+                    obsidian._category_dir(base, category, cfg.knowledge_other_dir),
                     args["title"],
                     body,
-                    category=args.get("category"),
+                    category=category,
                     tags=tags,
                     project=args.get("project"),
                     related=links,
@@ -651,6 +695,7 @@ def call_tool(name: str, args: dict[str, Any]) -> dict:
             }
         mode, reason = obsidian.effective_write_mode(cfg.vault, cfg.write_mode)
         scope = scope_mod.obsidian_scope()
+        start = Path(project_path).expanduser() if project_path else None
         return {
             "configured": True,
             "vault": str(cfg.vault),
@@ -662,6 +707,10 @@ def call_tool(name: str, args: dict[str, Any]) -> dict:
             # note in the catch-all, which is safe but not where it belongs.
             "knowledge_folders": obsidian.subfolders(cfg.vault / cfg.knowledge_dir),
             "catch_all_folder": cfg.knowledge_other_dir,
+            # The folder this project treats as its external memory (set via
+            # `dejavu obsidian project`). Pass it as `category`, or memory=true, on
+            # add_obsidian_knowledge when the user says to save to external memory.
+            "project_memory": scope_mod.project_memory(start),
             "research": cfg.research,
             "promote": cfg.promote,
             "relate": cfg.relate,

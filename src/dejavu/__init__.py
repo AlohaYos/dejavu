@@ -1,3 +1,3 @@
 """dejavu — a local knowledge base that lets Claude Code pick up where it left off."""
 
-__version__ = "0.5.1"
+__version__ = "0.6.0"

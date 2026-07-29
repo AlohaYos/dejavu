@@ -839,6 +839,71 @@ def cmd_obsidian_init(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _memory_parts(raw: str) -> list[str] | None:
+    """Split a memory folder name into safe path segments, or None if it escapes.
+
+    Only ordinary names survive: "..", ".", absolute roots and empties are rejected here
+    so nothing downstream can climb out of the Knowledge folder.
+    """
+    parts = [p.strip() for p in raw.replace("\\", "/").split("/") if p.strip()]
+    if not parts or any(p in ("..", ".") for p in parts):
+        return None
+    return parts
+
+
+def cmd_obsidian_project(args: argparse.Namespace) -> int:
+    vault, cfg = _require_vault()
+    root = scope_mod.find_project_root()
+    if root is None:
+        die("Not inside a dejavu project. Run `dejavu init` here first.")
+        raise AssertionError  # pragma: no cover
+
+    parts = _memory_parts(args.name)
+    if parts is None:
+        die(f"Invalid folder name: {args.name}\n  Use a name like 'dejavu' or 'Job/dejavu'.")
+        raise AssertionError  # pragma: no cover
+    rel = "/".join(parts)
+
+    folder = vault / cfg.knowledge_dir
+    for part in parts:
+        folder = folder / part
+    created = not folder.exists()
+    folder.mkdir(parents=True, exist_ok=True)
+
+    config_file = root / scope_mod.DEJAVU_DIR / scope_mod.CONFIG_NAME
+    scope_mod.set_config_value(config_file, "obsidian", "memory", rel)
+    obsidian.sync_vault(cfg, force=True)
+
+    where = f"{cfg.knowledge_dir}/{rel}"
+    print(f"✓ External memory for {root.name}: {where}")
+    if created:
+        print(f"  Created {where}/")
+    print(f"  Recorded in {scope_mod.DEJAVU_DIR}/{scope_mod.CONFIG_NAME} (travels with the repo)")
+    print('  Save here with: dejavu obsidian add "<title>" --memory --body -')
+    return EXIT_OK
+
+
+def _memory_category(vault: Path, cfg: scope_mod.ObsidianConfig) -> str:
+    """The project's external memory folder, verified to exist. Dies with guidance if not."""
+    mem = scope_mod.project_memory()
+    if not mem:
+        die(
+            "This project has no external memory folder set.\n"
+            "  Set one up: dejavu obsidian project <name>"
+        )
+        raise AssertionError  # pragma: no cover
+    base = vault / cfg.knowledge_dir
+    # `_category_dir` follows only folders that exist and never escapes `base`; if it
+    # comes back unchanged, the configured folder is gone.
+    if obsidian._category_dir(base, mem, "") == base:
+        die(
+            f"External memory folder {cfg.knowledge_dir}/{mem} is missing.\n"
+            f"  Recreate it: dejavu obsidian project {mem}"
+        )
+        raise AssertionError  # pragma: no cover
+    return mem
+
+
 def cmd_obsidian_sync(args: argparse.Namespace) -> int:
     _, cfg = _require_vault()
     stats = obsidian.sync_vault(cfg, force=True)
@@ -871,6 +936,8 @@ def cmd_obsidian_doctor(args: argparse.Namespace) -> int:
     scope = scope_mod.obsidian_scope()
     counts = {folder: obsidian.count_in_folder(scope, folder) for folder in cfg.include}
     indexed = sum(counts.values())
+    memory = scope_mod.project_memory()
+    memory_exists = bool(memory) and (vault / cfg.knowledge_dir / Path(*memory.split("/"))).is_dir()
 
     if args.json:
         print(
@@ -885,6 +952,8 @@ def cmd_obsidian_doctor(args: argparse.Namespace) -> int:
                     "promote": cfg.promote,
                     "relate": cfg.relate,
                     "index_db": str(scope.db_path),
+                    "project_memory": memory,
+                    "project_memory_exists": memory_exists,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -898,6 +967,9 @@ def cmd_obsidian_doctor(args: argparse.Namespace) -> int:
         print(f"              {folder}/  {count}")
     print(f"Write mode  {mode}")
     print(f"              because {reason}")
+    if memory:
+        flag = "" if memory_exists else "  (missing — run `dejavu obsidian project`)"
+        print(f"Memory      {cfg.knowledge_dir}/{memory}{flag}")
     print(f"Settings    research = {cfg.research}, promote = {cfg.promote}")
     if cfg.relate == "off":
         print("Auto-link   off")
@@ -1274,6 +1346,8 @@ def cmd_obsidian_add(args: argparse.Namespace) -> int:
             + "\n  Use --force if this is a false positive."
         )
 
+    category = _memory_category(vault, cfg) if args.memory else args.category
+
     base = vault / cfg.knowledge_dir
     mode, reason = obsidian.effective_write_mode(vault, cfg.write_mode)
     existing = obsidian.find_note(base, args.title)
@@ -1293,10 +1367,10 @@ def cmd_obsidian_add(args: argparse.Namespace) -> int:
             # frontmatter create_note is already writing.
             links = relate.suggest_for_new(cfg, title=args.title, body=body, keywords=tags)
             path = obsidian.create_note(
-                obsidian._category_dir(base, args.category, cfg.knowledge_other_dir),
+                obsidian._category_dir(base, category, cfg.knowledge_other_dir),
                 args.title,
                 body,
-                category=args.category,
+                category=category,
                 tags=tags,
                 project=args.project,
                 related=links,
@@ -1568,6 +1642,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     osp.set_defaults(func=cmd_obsidian_init)
 
+    osp = obs.add_parser(
+        "project",
+        help="point this project's external memory at a vault folder under Knowledge/",
+    )
+    osp.add_argument("name", help="folder under Knowledge/, e.g. dejavu or Job/dejavu")
+    osp.set_defaults(func=cmd_obsidian_project)
+
     osp = obs.add_parser("sync", help="refresh the index from the Markdown on disk")
     add_json(osp)
     osp.set_defaults(func=cmd_obsidian_sync)
@@ -1627,9 +1708,18 @@ def build_parser() -> argparse.ArgumentParser:
     osp = obs.add_parser("add", help="write a note into the vault's Knowledge folder")
     osp.add_argument("title")
     osp.add_argument("--body", help="body text; '-' or omitted reads from stdin")
-    osp.add_argument(
+    where = osp.add_mutually_exclusive_group()
+    where.add_argument(
         "--category",
-        help="a subfolder of Knowledge/, used only if it exists (otherwise the catch-all)",
+        help=(
+            "a subfolder of Knowledge/, used only if it exists (otherwise the catch-all); "
+            "nested as Job/dejavu"
+        ),
+    )
+    where.add_argument(
+        "--memory",
+        action="store_true",
+        help="write to this project's external memory folder (see `dejavu obsidian project`)",
     )
     osp.add_argument("--tags", help="comma-separated; written to the note's frontmatter")
     osp.add_argument("--project", help="the project this was learned in")

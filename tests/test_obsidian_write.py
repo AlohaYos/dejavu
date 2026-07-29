@@ -249,3 +249,84 @@ def test_subfolders_are_listed_for_the_caller_to_choose_from(vault: Path):
     (vault / "Knowledge/.hidden").mkdir()
 
     assert obsidian.subfolders(vault / "Knowledge") == ["API", "Other"]
+
+
+# ---------------------------------------------------------------- nested categories
+
+
+def test_a_nested_category_reaches_the_folder_inside(vault: Path):
+    (vault / "Knowledge/Job/dejavu").mkdir(parents=True)
+    (vault / "Knowledge/Other").mkdir()
+
+    chosen = obsidian._category_dir(vault / "Knowledge", "Job/dejavu", "Other")
+
+    assert chosen == vault / "Knowledge/Job/dejavu"
+
+
+def test_every_segment_of_a_nested_category_ignores_case(vault: Path):
+    (vault / "Knowledge/Job/DejaVu").mkdir(parents=True)
+
+    chosen = obsidian._category_dir(vault / "Knowledge", "job/dejavu", "Other")
+
+    assert chosen == vault / "Knowledge/Job/DejaVu"
+
+
+def test_a_nested_category_stops_at_the_deepest_folder_that_exists(vault: Path):
+    """Job/ is still the right place for a Job note; the catch-all would lose that."""
+    (vault / "Knowledge/Job").mkdir(parents=True)
+    (vault / "Knowledge/Other").mkdir()
+
+    chosen = obsidian._category_dir(vault / "Knowledge", "Job/NewProject", "Other")
+
+    assert chosen == vault / "Knowledge/Job"
+    assert not (vault / "Knowledge/Job/NewProject").exists()
+
+
+def test_a_nested_category_whose_first_segment_is_unknown_uses_the_catch_all(vault: Path):
+    (vault / "Knowledge/Other").mkdir()
+
+    chosen = obsidian._category_dir(vault / "Knowledge", "Nowhere/dejavu", "Other")
+
+    assert chosen == vault / "Knowledge/Other"
+
+
+@pytest.mark.parametrize("category", ["../../etc", "/etc", "~/secrets", "Job/../../etc"])
+def test_a_category_cannot_climb_out_of_the_knowledge_folder(vault: Path, category: str):
+    (vault / "Knowledge/Job").mkdir(parents=True)
+    (vault / "Knowledge/Other").mkdir()
+
+    chosen = obsidian._category_dir(vault / "Knowledge", category, "Other")
+
+    assert vault / "Knowledge" in chosen.parents or chosen == vault / "Knowledge"
+
+
+def test_subfolders_lists_nested_paths_so_a_caller_can_name_one(vault: Path):
+    (vault / "Knowledge/API").mkdir()
+    (vault / "Knowledge/Job/dejavu").mkdir(parents=True)
+    (vault / "Knowledge/Job/GiLens").mkdir(parents=True)
+
+    assert obsidian.subfolders(vault / "Knowledge") == [
+        "API",
+        "Job",
+        "Job/GiLens",
+        "Job/dejavu",
+    ]
+
+
+def test_subfolders_stops_at_the_depth_limit(vault: Path):
+    (vault / "Knowledge/Job/dejavu/Design").mkdir(parents=True)
+
+    assert obsidian.subfolders(vault / "Knowledge") == ["Job", "Job/dejavu"]
+    assert obsidian.subfolders(vault / "Knowledge", depth=3) == [
+        "Job",
+        "Job/dejavu",
+        "Job/dejavu/Design",
+    ]
+
+
+def test_subfolders_skips_hidden_and_machinery_at_every_level(vault: Path):
+    (vault / "Knowledge/Job/.obsidian").mkdir(parents=True)
+    (vault / "Knowledge/Job/node_modules").mkdir(parents=True)
+    (vault / "Knowledge/Job/dejavu").mkdir(parents=True)
+
+    assert obsidian.subfolders(vault / "Knowledge") == ["Job", "Job/dejavu"]

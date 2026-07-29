@@ -31,6 +31,25 @@ repository — a language pitfall, a tool's real behaviour, the user's own worki
 belongs to the user: `dejavu obsidian add "<title>" --body -` when a vault is set up,
 otherwise `dejavu add --scope user`. Commands say what to do next when it matters.
 
+## External memory (Obsidian)
+
+A project can point at one vault folder as its **external memory** — its shelf in the
+Obsidian vault, set once with `dejavu obsidian project <name>`. The user reaches for it
+when they want something kept where they can read it on any device, or out of git: design
+docs, notes, a TODO snapshot. They may call it "外部記憶", "Obsidian", or "本棚".
+
+- The user says to save something to external memory (「外部記憶に保存」「設計書を Obsidian に」)
+  → `dejavu obsidian add "<title>" --memory --body -`. It goes to the project's folder even
+  though it is project-specific — that is the point of external memory
+- "外部記憶の設計書を読んで…" (read from external memory) → `dejavu search "<keywords>"`;
+  vault notes come back with `source: obsidian`. On an append-only vault, "整理" (tidy up)
+  produces a *new* consolidated note rather than rewriting one
+- "このTODOを外部記憶にも保存して" → the **project DB stays the source of truth** (so
+  "完了にしといて" / "add a TODO" still work). Write the current list as a dated snapshot:
+  `dejavu list --category plan` → `dejavu obsidian add "TODO YYYY-MM-DD" --memory --body -`
+
+If no external memory is set, `--memory` says so and points at `dejavu obsidian project`.
+
 ## How to write entries
 
 - **Dense, not long.** Skip the narrative; keep the reasoning behind a decision, the
