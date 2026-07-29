@@ -851,6 +851,22 @@ def _memory_parts(raw: str) -> list[str] | None:
     return parts
 
 
+def _ensure_local_config_ignored(root: Path) -> None:
+    """Keep .dejavu/config.local.toml out of git.
+
+    The value it holds points into this machine's own vault, so committing it would push a
+    personal folder layout onto anyone who clones the repo. A .gitignore inside .dejavu/
+    is itself tracked, so the rule travels while the local config does not.
+    """
+    gitignore = root / scope_mod.DEJAVU_DIR / ".gitignore"
+    line = scope_mod.LOCAL_CONFIG_NAME
+    lines = gitignore.read_text(encoding="utf-8").splitlines() if gitignore.exists() else []
+    if line in (ln.strip() for ln in lines):
+        return
+    lines.append(line)
+    gitignore.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def cmd_obsidian_project(args: argparse.Namespace) -> int:
     vault, cfg = _require_vault()
     root = scope_mod.find_project_root()
@@ -870,15 +886,18 @@ def cmd_obsidian_project(args: argparse.Namespace) -> int:
     created = not folder.exists()
     folder.mkdir(parents=True, exist_ok=True)
 
-    config_file = root / scope_mod.DEJAVU_DIR / scope_mod.CONFIG_NAME
-    scope_mod.set_config_value(config_file, "obsidian", "memory", rel)
+    scope_mod.set_config_value(scope_mod.project_local_config_path(root), "obsidian", "memory", rel)
+    _ensure_local_config_ignored(root)
     obsidian.sync_vault(cfg, force=True)
 
     where = f"{cfg.knowledge_dir}/{rel}"
     print(f"✓ External memory for {root.name}: {where}")
     if created:
         print(f"  Created {where}/")
-    print(f"  Recorded in {scope_mod.DEJAVU_DIR}/{scope_mod.CONFIG_NAME} (travels with the repo)")
+    print(
+        f"  Recorded in {scope_mod.DEJAVU_DIR}/{scope_mod.LOCAL_CONFIG_NAME} "
+        f"(kept out of git — it points into your own vault)"
+    )
     print('  Save here with: dejavu obsidian add "<title>" --memory --body -')
     return EXIT_OK
 

@@ -18,6 +18,10 @@ DB_NAME = "knowledge.db"
 OBSIDIAN_DB_NAME = "obsidian.db"
 SHARED_DB_NAME = "shared.db"
 CONFIG_NAME = "config.toml"
+# Per-machine project settings that must never be committed. `config.toml` is shared and
+# git-tracked (stale thresholds a team agrees on); anything that points into *this*
+# machine's Obsidian vault belongs here instead, where .dejavu/.gitignore keeps it local.
+LOCAL_CONFIG_NAME = "config.local.toml"
 TRIGGERS_NAME = "dejavu-triggers.md"
 
 # Per-category defaults: (default storage, days before an entry is considered stale)
@@ -386,19 +390,25 @@ def obsidian_config(config_file: Path | None = None) -> ObsidianConfig:
     return cfg
 
 
+def project_local_config_path(root: Path) -> Path:
+    """Per-machine, never-committed project settings (see LOCAL_CONFIG_NAME)."""
+    return root / DEJAVU_DIR / LOCAL_CONFIG_NAME
+
+
 def project_memory(start: Path | None = None) -> str | None:
     """The vault subfolder (under knowledge_dir) this project uses as its external memory.
 
-    Stored per-project in .dejavu/config.toml as `[obsidian] memory`, not in the user
-    config: it names *this repository's* shelf in the vault, so it travels with the repo
-    — a teammate who clones it files notes to the same folder (their vault path is still
-    their own, set in the user config). A path relative to knowledge_dir, so it may be
-    nested, e.g. "Job/dejavu". Returns None when the project has not set one.
+    Stored in .dejavu/config.local.toml as `[obsidian] memory` — **not** the tracked
+    config.toml. Which folder of *this machine's* vault a project is shelved in is a
+    property of the user's own vault layout, not of the repository: a teammate who cloned
+    it would have no "Job/dejavu" folder, so committing the value would break --memory for
+    them. A path relative to knowledge_dir, so it may be nested, e.g. "Job/dejavu".
+    Returns None when the project has not set one.
     """
     root = find_project_root(start)
     if root is None:
         return None
-    section = load_config(root / DEJAVU_DIR / CONFIG_NAME).get("obsidian", {})
+    section = load_config(project_local_config_path(root)).get("obsidian", {})
     value = section.get("memory")
     if not isinstance(value, str):
         return None

@@ -50,21 +50,21 @@ def test_project_memory_is_none_when_unset(project: Path):
 
 def test_project_memory_reads_the_project_config(project: Path):
     scope_mod.set_config_value(
-        project / scope_mod.DEJAVU_DIR / scope_mod.CONFIG_NAME, "obsidian", "memory", "dejavu"
+        scope_mod.project_local_config_path(project), "obsidian", "memory", "dejavu"
     )
     assert scope_mod.project_memory() == "dejavu"
 
 
 def test_project_memory_keeps_a_nested_path(project: Path):
     scope_mod.set_config_value(
-        project / scope_mod.DEJAVU_DIR / scope_mod.CONFIG_NAME, "obsidian", "memory", "Job/dejavu"
+        scope_mod.project_local_config_path(project), "obsidian", "memory", "Job/dejavu"
     )
     assert scope_mod.project_memory() == "Job/dejavu"
 
 
 def test_project_memory_strips_stray_slashes(project: Path):
     scope_mod.set_config_value(
-        project / scope_mod.DEJAVU_DIR / scope_mod.CONFIG_NAME, "obsidian", "memory", "/Job/dejavu/"
+        scope_mod.project_local_config_path(project), "obsidian", "memory", "/Job/dejavu/"
     )
     assert scope_mod.project_memory() == "Job/dejavu"
 
@@ -84,6 +84,38 @@ def test_project_command_creates_the_folder_and_records_it(wired):
 
     assert (vault / "Knowledge/dejavu").is_dir()
     assert scope_mod.project_memory() == "dejavu"
+
+
+def test_project_command_records_to_the_local_config_not_the_tracked_one(wired):
+    """The value points into this machine's vault, so it must never be committed."""
+    vault, project = wired
+
+    main(["obsidian", "project", "dejavu"])
+
+    local = project / scope_mod.DEJAVU_DIR / scope_mod.LOCAL_CONFIG_NAME
+    tracked = project / scope_mod.DEJAVU_DIR / scope_mod.CONFIG_NAME
+    assert "memory" in local.read_text(encoding="utf-8")
+    assert not tracked.exists() or "memory" not in tracked.read_text(encoding="utf-8")
+
+
+def test_project_command_ignores_the_local_config_in_git(wired):
+    vault, project = wired
+
+    main(["obsidian", "project", "dejavu"])
+
+    gitignore = project / scope_mod.DEJAVU_DIR / ".gitignore"
+    assert scope_mod.LOCAL_CONFIG_NAME in gitignore.read_text(encoding="utf-8").split()
+
+
+def test_project_command_does_not_duplicate_the_ignore_line(wired):
+    vault, project = wired
+
+    main(["obsidian", "project", "dejavu"])
+    main(["obsidian", "project", "Job/dejavu"])
+
+    gitignore = project / scope_mod.DEJAVU_DIR / ".gitignore"
+    lines = [ln.strip() for ln in gitignore.read_text(encoding="utf-8").splitlines()]
+    assert lines.count(scope_mod.LOCAL_CONFIG_NAME) == 1
 
 
 def test_project_command_accepts_a_nested_path(wired):
