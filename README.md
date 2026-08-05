@@ -382,6 +382,7 @@ one-time; you never need to run them again.
 > - If you do not have [Homebrew](https://brew.sh), install that first
 > - The shorter alias `deja` works everywhere `dejavu` does
 > - When a newer version comes out, `brew upgrade dejavu` updates it
+> - **On Windows?** Homebrew is macOS/Linux only — follow [docs/INSTALL.windows.md](docs/INSTALL.windows.md) for the `git clone` + `pip` route instead. Everything after this step is identical.
 
 ### 2. Connect Obsidian (optional)
 

@@ -329,6 +329,7 @@ dejavu init --global
 > - [Homebrew](https://brew.sh) が入っていない場合は、先にインストールしてください
 > - `dejavu` の代わりに、短い `deja` と打っても同じように動きます
 > - 新しいバージョンに上げたくなったら `brew upgrade dejavu` でアップデートできます
+> - **Windows の場合** Homebrew は macOS/Linux 専用です。代わりに [docs/INSTALL.windows.ja.md](docs/INSTALL.windows.ja.md) の `git clone` + `pip` 手順で入れてください。この手順より後は同じです
 
 ### 2. Obsidian を繋ぐ（任意）
 

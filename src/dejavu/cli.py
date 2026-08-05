@@ -9,6 +9,7 @@ Output is designed to be read by Claude first and a human second:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import sys
 import time
@@ -1776,7 +1777,36 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _force_utf8_streams() -> None:
+    """Force stdio to UTF-8 on Windows. A no-op on every other platform.
+
+    Japanese Windows defaults its console to cp932, which has no `✓` or `⚠`. Nearly
+    every dejavu command prints one of those, so on cp932 they die with
+    UnicodeEncodeError before doing anything useful. `dejavu mcp` is worse: cp932
+    mangles non-ASCII bytes and Windows text mode rewrites "\n" into "\r\n", which
+    corrupts the newline-delimited JSON-RPC the host reads. Reconfiguring the three
+    standard streams to UTF-8 fixes both at the source.
+
+    macOS and Linux already run UTF-8, so this returns immediately there and their
+    behaviour is left exactly as it was.
+    """
+    if sys.platform != "win32":
+        return
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:  # a stream that predates io.TextIOWrapper.reconfigure
+            continue
+        # stdout carries `dejavu mcp`'s JSON-RPC; pin its newline too, so text mode
+        # cannot turn "\n" into "\r\n" and break the framing.
+        kwargs: dict[str, str] = {"encoding": "utf-8"}
+        if stream is sys.stdout:
+            kwargs["newline"] = ""
+        with contextlib.suppress(ValueError, OSError):
+            reconfigure(**kwargs)
+
+
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_streams()
     args = build_parser().parse_args(argv)
 
     try:
