@@ -42,3 +42,14 @@ note = 14
 # Whether to offer to promote project knowledge to the vault
 #   ask | always | never
 # promote = "ask"
+#
+# At the end of a session, ask Claude to file what it learned in the vault — without
+# checking with you first, on the grounds that you prune the vault yourself and a note
+# you delete costs less than a discovery you lose. Needs the Stop hook installed by
+# `dejavu init --global`. Never fires when promote = "never".
+#   on | off
+# harvest = "on"
+#
+# Sessions with fewer transcript lines than this are too small to have produced
+# anything, and are skipped silently.
+# harvest_min_lines = 40

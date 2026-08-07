@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from importlib import resources
 from pathlib import Path
 
-from . import __version__, link, obsidian, preflight, progress, relate, safety, store
+from . import __version__, hooks, link, obsidian, preflight, progress, relate, safety, store
 from . import scope as scope_mod
 from .scope import CATEGORIES, STATUSES, Scope
 from .search import search as run_search
@@ -268,6 +268,11 @@ def cmd_init(args: argparse.Namespace) -> int:
         connect(scope_mod.user_scope()).close()  # make sure the user-scope DB exists
         print(f"✓ Installed global instructions in {home}")
         print("  Knowledge now accumulates in the user scope even outside initialised projects.")
+        if not args.no_hooks:
+            print(install_stop_hook())
+            print("  At the end of a session Claude is asked to file what it learned in the")
+            print("  vault, without checking with you first. Turn it off with")
+            print("  `dejavu config harvest off`.")
         return EXIT_OK
 
     root = Path.cwd()
@@ -570,6 +575,85 @@ def _mcp_binary() -> Path:
     return Path(sys.argv[0]).absolute()
 
 
+def claude_settings_path() -> Path:
+    return Path.home() / ".claude" / "settings.json"
+
+
+HOOK_TIMEOUT = 10
+
+
+def _hook_entry() -> dict:
+    return {
+        "type": "command",
+        "command": f'"{_mcp_binary()}" hook stop',
+        "timeout": HOOK_TIMEOUT,
+    }
+
+
+def install_stop_hook(settings_path: Path | None = None) -> str:
+    """Register the session-harvest hook in Claude Code's settings.json.
+
+    Returns a one-line report for the caller to print.
+
+    This edits a file the user did not ask us to touch and may have hand-tuned, so it
+    only ever *appends* to the existing Stop list — someone else's hooks keep running,
+    and in their original order. A settings.json we cannot parse is left alone rather
+    than replaced with a version we invented.
+    """
+    path = settings_path or claude_settings_path()
+
+    settings: dict = {}
+    if path.exists():
+        try:
+            settings = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            die(
+                f"{path} is not valid JSON. Fix or move it before running this, so the "
+                f"command does not destroy a config it cannot parse."
+            )
+        if not isinstance(settings, dict):  # pragma: no cover - defensive
+            die(f"{path} does not contain a JSON object.")
+
+    entry = _hook_entry()
+    hooks_section = settings.setdefault("hooks", {})
+    stop_matchers = hooks_section.setdefault("Stop", [])
+
+    # Idempotent on the command, not on the whole entry: re-running after an upgrade that
+    # changed the timeout should not leave two hooks racing to prompt the same harvest.
+    for matcher in stop_matchers:
+        for existing in matcher.get("hooks", []):
+            if existing.get("command") == entry["command"]:
+                return f"  Stop hook   : already registered in {path}"
+
+    stop_matchers.append({"matcher": "", "hooks": [entry]})
+
+    if path.exists():
+        backup = path.with_suffix(f".json.bak.{time.strftime('%Y%m%d%H%M%S')}")
+        backup.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(settings, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return f"  Stop hook   : registered in {path} (session harvest)"
+
+
+def cmd_hook(args: argparse.Namespace) -> int:
+    """Run a host hook. Invoked by Claude Code, never by a person."""
+    if args.event != "stop":  # pragma: no cover - argparse restricts this
+        return EXIT_OK
+
+    try:
+        payload = json.loads(sys.stdin.read() or "{}")
+    except ValueError:
+        return EXIT_OK  # A payload we cannot read is not a reason to block the session.
+    if not isinstance(payload, dict):
+        return EXIT_OK
+
+    code, message = hooks.stop_hook(payload)
+    if message:
+        print(message, file=sys.stderr)
+    return code
+
+
 def cmd_install_mcp(args: argparse.Namespace) -> int:
     config_path = Path(args.config).expanduser() if args.config else MCP_HOSTS["claude-desktop"]
 
@@ -771,6 +855,8 @@ CONFIG_KEYS = (
     "write_mode",
     "research",
     "promote",
+    "harvest",
+    "harvest_min_lines",
     "relate",
     "relate_key",
     "relate_top_k",
@@ -1476,6 +1562,8 @@ def cmd_config(args: argparse.Namespace) -> int:
         "write_mode": cfg.write_mode,
         "research": cfg.research,
         "promote": cfg.promote,
+        "harvest": cfg.harvest,
+        "harvest_min_lines": str(cfg.harvest_min_lines),
         "relate": cfg.relate,
         "relate_key": cfg.relate_key,
         "relate_top_k": str(cfg.relate_top_k),
@@ -1550,6 +1638,11 @@ def build_parser() -> argparse.ArgumentParser:
         dest="globally",
         action="store_true",
         help="install instructions into ~/.claude so every project can use dejavu",
+    )
+    sp.add_argument(
+        "--no-hooks",
+        action="store_true",
+        help="with --global: leave Claude Code's settings.json alone (no session harvest)",
     )
     sp.set_defaults(func=cmd_init)
 
@@ -1773,6 +1866,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--config", help="path to the host's JSON config (default: Claude Desktop)")
     sp.add_argument("--force", action="store_true", help="overwrite an existing registration")
     sp.set_defaults(func=cmd_install_mcp)
+
+    sp = sub.add_parser("hook", help="run a host hook (launched by Claude Code, not by you)")
+    sp.add_argument("event", choices=["stop"])
+    sp.set_defaults(func=cmd_hook)
 
     return p
 

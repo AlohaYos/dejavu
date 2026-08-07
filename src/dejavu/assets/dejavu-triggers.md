@@ -31,6 +31,9 @@ repository — a language pitfall, a tool's real behaviour, the user's own worki
 belongs to the user: `dejavu obsidian add "<title>" --body -` when a vault is set up,
 otherwise `dejavu add --scope user`. Commands say what to do next when it matters.
 
+Write it rather than asking whether to; the user prunes their own vault, so a note they
+delete costs less than a discovery nobody wrote down. Report it in one line.
+
 ## External memory (Obsidian)
 
 A project can point at one vault folder as its **external memory** — its shelf in the

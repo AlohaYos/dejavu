@@ -165,6 +165,8 @@ research_dir  = "Research"
 write_mode    = "auto"       # auto | full | append-only
 research      = "findings"   # all | findings | manual
 promote       = "ask"        # ask | always | never
+harvest       = "on"         # on | off
+harvest_min_lines = 40
 relate        = "off"        # off | search | embed
 relate_model  = "bge-m3"
 relate_host   = "http://localhost:11434"
@@ -188,6 +190,8 @@ relate_defer_days = 7
 | `write_mode` | 後述 |
 | `research` | 調査履歴をどれだけ残すか |
 | `promote` | プロジェクトの知識を vault に上げるか聞くかどうか |
+| `harvest` | 後述 |
+| `harvest_min_lines` | この行数に満たないセッションは黙って見送る（既定 40） |
 | `relate*` | [メモ同士の自動リンク](#メモ同士の自動リンクollama)。既定は `off` |
 
 ### `research` — 調査履歴の粒度
@@ -213,6 +217,19 @@ dejavu --research all resume
 | `never` | 提案しない |
 
 `dejavu config promote always` で永続化されます。`ask` に戻すのも同じ形です。
+
+### `harvest` — セッション終わりの棚卸し
+
+セッションが終わると、Claude Code は `dejavu init --global` が登録した Stop フックを実行します。dejavu はそこで1つだけ指示を返します。「別のリポジトリでも成り立つ知識を得たなら、いま vault に書け。ユーザーに確認は取るな」。
+
+**1セッションにつき1回**だけ動きます。次のどれかに当てはまるときは何も言いません: vault が未設定 / `harvest = "off"` / `promote = "never"` / セッションが `harvest_min_lines` より短い。フック自身は何も書きません。頼むだけです。
+
+| 値 | 挙動 |
+| --- | --- |
+| `on` | セッション終わりに棚卸しを促す（既定） |
+| `off` | 促さない |
+
+フックの登録は `dejavu init --global`（`--no-hooks` で見送れます）。`settings.json` の既存フックはそのまま残り、書き換える前にバックアップを取ります。
 
 ---
 

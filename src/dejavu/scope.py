@@ -267,6 +267,8 @@ class ObsidianConfig:
     write_mode: str  # auto | full | append-only
     research: str  # all | findings | manual
     promote: str  # ask | always | never
+    harvest: str  # on | off
+    harvest_min_lines: int
     relate: str  # off | search | embed
     relate_key: str
     relate_top_k: int
@@ -293,6 +295,7 @@ OBSIDIAN_DEFAULTS: dict[str, str] = {
     "write_mode": "auto",
     "research": "findings",
     "promote": "ask",
+    "harvest": "on",
     "relate": "off",
     "relate_key": "related",
     "relate_model": "bge-m3",
@@ -304,6 +307,10 @@ OBSIDIAN_DEFAULTS: dict[str, str] = {
     "relate_keep_alive": "24h",
 }
 OBSIDIAN_INT_DEFAULTS: dict[str, int] = {
+    # A session shorter than this produced nothing worth filing. The unit is lines of the
+    # host's transcript, which is one JSON object per turn — so this is "about 40 turns",
+    # not a character count.
+    "harvest_min_lines": 40,
     "relate_top_k": 5,
     "relate_min_chars": 40,
     "relate_defer_days": 7,
@@ -322,6 +329,7 @@ OBSIDIAN_CHOICES: dict[str, tuple[str, ...]] = {
     "write_mode": ("auto", "full", "append-only"),
     "research": ("all", "findings", "manual"),
     "promote": ("ask", "always", "never"),
+    "harvest": ("on", "off"),
     "relate": ("off", "search", "embed"),
     "relate_autostart": ("ask", "always", "never"),
 }
@@ -370,6 +378,8 @@ def obsidian_config(config_file: Path | None = None) -> ObsidianConfig:
         write_mode=pick("write_mode"),
         research=pick("research"),
         promote=pick("promote"),
+        harvest=pick("harvest"),
+        harvest_min_lines=pick_int("harvest_min_lines"),
         relate=pick("relate"),
         relate_key=pick("relate_key"),
         relate_top_k=pick_int("relate_top_k"),

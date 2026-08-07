@@ -384,6 +384,14 @@ one-time; you never need to run them again.
 > - When a newer version comes out, `brew upgrade dejavu` updates it
 > - **On Windows?** Homebrew is macOS/Linux only — follow [docs/INSTALL.windows.md](docs/INSTALL.windows.md) for the `git clone` + `pip` route instead. Everything after this step is identical.
 
+`init --global` also registers a hook in Claude Code's `settings.json`, so that at the
+end of a session Claude files what it learned in your vault — without stopping to ask
+you first. That last part is deliberate: you can delete a note you did not want in a
+second, but a discovery nobody wrote down is gone. It only runs once per session, stays
+quiet until you connect a vault (step 2), and `dejavu config harvest off` turns it off.
+Your existing hooks are left in place; the file is backed up before it is touched. To
+skip it entirely, use `dejavu init --global --no-hooks`.
+
 ### 2. Connect Obsidian (optional)
 
 Never used Obsidian? It is free, and as written above a vault is just a folder.

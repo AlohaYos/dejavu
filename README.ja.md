@@ -331,6 +331,10 @@ dejavu init --global
 > - 新しいバージョンに上げたくなったら `brew upgrade dejavu` でアップデートできます
 > - **Windows の場合** Homebrew は macOS/Linux 専用です。代わりに [docs/INSTALL.windows.ja.md](docs/INSTALL.windows.ja.md) の `git clone` + `pip` 手順で入れてください。この手順より後は同じです
 
+`init --global` は Claude Code の `settings.json` にフックも登録します。これにより、セッションの終わりに Claude が「そのとき学んだこと」を自分で本棚（vault）に書き残すようになります。**あなたに確認を取らずに書く**のは意図的です。要らないノートは数秒で消せますが、誰も書き残さなかった発見は戻ってきません。
+
+1セッションにつき1回だけ動き、vault を繋ぐ（手順2）までは何も言いません。止めたいときは `dejavu config harvest off`。既存のフックはそのまま残り、書き換える前に `settings.json` のバックアップを取ります。最初から入れたくない場合は `dejavu init --global --no-hooks` です。
+
 ### 2. Obsidian を繋ぐ（任意）
 
 Obsidian を使ったことが無くても大丈夫です。無料ですし、前に書いたとおり vault はただのフォルダです。

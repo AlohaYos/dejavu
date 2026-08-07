@@ -166,6 +166,8 @@ research_dir  = "Research"
 write_mode    = "auto"       # auto | full | append-only
 research      = "findings"   # all | findings | manual
 promote       = "ask"        # ask | always | never
+harvest       = "on"         # on | off
+harvest_min_lines = 40
 relate        = "off"        # off | search | embed
 relate_model  = "bge-m3"
 relate_host   = "http://localhost:11434"
@@ -189,6 +191,8 @@ relate_defer_days = 7
 | `write_mode` | See below |
 | `research` | How much of an investigation to keep |
 | `promote` | Whether to offer to lift project knowledge into the vault |
+| `harvest` | See below |
+| `harvest_min_lines` | Sessions shorter than this are skipped silently (default 40) |
 | `relate*` | [Automatic linking](#automatic-linking-between-notes-ollama). Off by default |
 
 ### `research` — how much to file
@@ -214,6 +218,24 @@ dejavu --research all resume
 | `never` | Never offer |
 
 `dejavu config promote always` persists it; `ask` puts it back.
+
+### `harvest` — the session-end sweep
+
+At the end of a session, Claude Code runs the Stop hook that `dejavu init --global`
+registered. dejavu answers it with one instruction: file anything you learned that would
+still be true in a different repository — and do it without asking the user first.
+
+It fires **once per session**, and stays silent when any of these hold: no vault is
+configured, `harvest = "off"`, `promote = "never"`, or the session was shorter than
+`harvest_min_lines`. Nothing is written by the hook itself; it only asks.
+
+| Value | Behaviour |
+| --- | --- |
+| `on` | Prompt for a harvest at the end of a session (default) |
+| `off` | Never prompt |
+
+The hook is installed by `dejavu init --global` (skip it with `--no-hooks`). Existing
+hooks in `settings.json` are preserved and the file is backed up before it is edited.
 
 ---
 
