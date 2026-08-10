@@ -712,6 +712,47 @@ after they were added stays where it is, so there is nothing to worry about.
 The files as they were before are backed up elsewhere on your machine (and dejavu tells
 you where it put them).
 
+### Why it belongs to the night
+
+Linking is not something you have to watch happen. That makes it a good fit for a job that
+runs while you are asleep — and the fit is better than mere convenience.
+
+While you are awake you record things fast and in whatever order they arrive. While you
+sleep your brain goes back over the day and files it against what you already knew: the new
+material gets attached to the older material about the same thing. Nothing is erased. What
+changes is what is connected to what. It is why a problem you fought with yesterday is
+sometimes plain in the morning — not because you learned anything more overnight, but
+because it got wired to something you already had.
+
+dejavu divides along the same line.
+
+| While you work | Overnight |
+|---|---|
+| `dejavu add` — get it down before it is lost | `dejavu obsidian link` — attach it to what was already there |
+| One note at a time | The whole vault in one pass |
+| Nothing is compared against anything | Notes about the same subject find each other |
+
+The link pass only ever adds connections. It never rewrites what a note says, and it can be
+undone. Run it overnight and by morning what you wrote yesterday is already sitting next to
+the older notes it belongs with — and the next time you ask about the subject, dejavu can
+walk from one to the others.
+
+This is an analogy, not a claim about neuroscience. But it is a useful one for deciding
+when to run it: after new material has come in, and while nothing new is arriving.
+
+A nightly job is four commands:
+
+```bash
+dejavu obsidian sync                   # pick up what changed on disk
+dejavu obsidian relate --backfill      # read the notes it has not read yet
+dejavu obsidian link --all --plan      # look first — prints a plan id
+dejavu obsidian link --all --apply --plan-id <id>
+```
+
+Guard it. Skip everything if Ollama is not answering, and stop without applying if the plan
+comes back far larger than usual. An unattended job that edits your own notes should have a
+ceiling written into it.
+
 > - This feature uses [Ollama](#5-link-your-notes-to-each-other-optional). Finish step 5
 >   before running it
 > - Your notes are never sent off your machine. Everything happens locally
