@@ -22,21 +22,14 @@ MARKER_DIR_NAME = "harvest"
 MARKER_MAX_AGE_DAYS = 30
 
 # Written to stderr on exit 2, so the assistant reads it as instruction. Kept short: it is
-# competing with a full session's context for attention.
+# competing with a full session's context for attention, and on a terminal client every
+# line of it is printed in full — a long notice is read as noise by the human too.
 HARVEST_MESSAGE = """\
 [dejavu] Session harvest.
-
-Anything learned here that would still be true in a *different* repository — a tool's
-real behaviour, an undocumented constraint, something that took real digging — belongs
-in the vault. File it now:
-
-  1. dejavu search "<keywords>"  — first. Extend the existing note if there is one.
-  2. dejavu obsidian add "<title>" --category <folder> --project <name> --body -
-  3. Report it in one line.
-
-Do not ask the user whether to save; they prune the vault themselves, so an unnecessary
-note is cheaper than a lost one. Repository-specific detail is out of scope — that is
-`dejavu add`. Nothing worth keeping? Say "harvest: nothing" and stop.\
+Learned something true in *another* repository too? File it now — do not ask first.
+  dejavu search "<keywords>"   (extend an existing note, never duplicate)
+  dejavu obsidian add "<title>" --category <folder> --project <name> --body -
+Report it in one line. Repo-specific detail goes to `dejavu add`. Nothing? "harvest: nothing".\
 """
 
 
