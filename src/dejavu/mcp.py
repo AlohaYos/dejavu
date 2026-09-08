@@ -394,6 +394,12 @@ LINK_TOOLS: list[dict[str, Any]] = [
                     "description": "Folder inside the vault. Omit only with all: true.",
                 },
                 "all": {"type": "boolean", "description": "The whole vault. Prefer a folder."},
+                "limit": {
+                    "type": "integer",
+                    "description": (
+                        "Plan at most this many notes; the rest come back next time."
+                    ),
+                },
             },
         },
     },
@@ -646,7 +652,11 @@ def call_tool(name: str, args: dict[str, Any]) -> dict:
         cfg = scope_mod.obsidian_config()
         _vault()
         try:
-            made = link.plan(cfg, None if args.get("all") else args.get("folder"))
+            made = link.plan(
+                cfg,
+                None if args.get("all") else args.get("folder"),
+                limit=args.get("limit"),
+            )
         except (link.LinkRefused, relate.OllamaUnavailable) as exc:
             raise ValueError(str(exc)) from exc
         payload = made.as_dict()

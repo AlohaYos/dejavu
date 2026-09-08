@@ -150,6 +150,39 @@ def test_the_plan_counts_the_users_own_notes(inbox: Path):
     assert made.handwritten == len(made.files)  # every one of them, in this folder
 
 
+def test_a_plan_after_applying_has_nothing_left_to_do(inbox: Path):
+    """The count is the increment. Otherwise a nightly run rewrites the whole vault forever."""
+    cfg = configure(inbox)
+    made = link.plan(cfg, "Inbox")
+    link.apply(cfg, made.plan_id)
+
+    again = link.plan(cfg, "Inbox")
+
+    assert made.files
+    assert again.files == []
+    assert again.truncated == 0
+
+
+def test_a_limit_leaves_the_rest_for_the_next_run(inbox: Path):
+    cfg = configure(inbox)
+    whole = link.plan(cfg, "Inbox")
+    assert len(whole.files) == 2  # 確定申告 and 領収書
+
+    first = link.plan(cfg, "Inbox", limit=1)
+
+    assert len(first.files) == 1
+    assert first.truncated == 1
+    assert first.handwritten == 1
+
+    link.apply(cfg, first.plan_id)
+    second = link.plan(cfg, "Inbox")
+
+    assert [entry["path"] for entry in second.files] == [
+        entry["path"] for entry in whole.files if entry["path"] != first.files[0]["path"]
+    ]
+    assert second.truncated == 0
+
+
 def test_txt_files_are_offered_for_renaming(inbox: Path):
     (inbox / "Inbox/メモ.txt").write_text("何かのメモ。", encoding="utf-8")
 

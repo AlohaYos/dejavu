@@ -1344,6 +1344,10 @@ def cmd_obsidian_link(args: argparse.Namespace) -> int:
     """The one command that edits notes the user wrote. See `link.py` for why that is safe."""
     vault, cfg = _require_vault()
 
+    limit = getattr(args, "limit", None)
+    if limit is not None and limit < 1:
+        die("--limit takes a number of notes, at least 1.")
+
     if args.history:
         found = link.runs(cfg)
         if args.json:
@@ -1409,7 +1413,12 @@ def cmd_obsidian_link(args: argparse.Namespace) -> int:
 
         bar = progress.Progress()
         bar.step("Reading the notes")
-        made = link.plan(cfg, folder, progress=lambda done, total: bar.tick(f"{done} / {total}"))
+        made = link.plan(
+            cfg,
+            folder,
+            limit=limit,
+            progress=lambda done, total: bar.tick(f"{done} / {total}"),
+        )
         bar.done()
     except (link.LinkRefused, relate.OllamaUnavailable) as exc:
         die(str(exc))
@@ -1427,6 +1436,8 @@ def cmd_obsidian_link(args: argparse.Namespace) -> int:
     print(f"{where}: {len(made.files)} notes\n")
     print(f"  {made.link_count} links would be added")
     print(f"  {len(made.files)} notes would be changed, {made.handwritten} of them yours")
+    if made.truncated:
+        print(f"  {made.truncated} more notes are waiting for the next run")
     if made.renames:
         print(f"  {len(made.renames)} .txt files would be renamed to .md")
     if made.hubs:
@@ -1815,6 +1826,11 @@ def build_parser() -> argparse.ArgumentParser:
     osp.add_argument("--restore", action="store_true", help="put the files back as they were")
     osp.add_argument("--run", help="which run to undo (default: the last one)")
     osp.add_argument("--force", action="store_true", help="restore even over later edits")
+    osp.add_argument(
+        "--limit",
+        type=int,
+        help="plan at most this many notes; the rest wait for the next run",
+    )
     add_json(osp)
     osp.set_defaults(func=cmd_obsidian_link)
 

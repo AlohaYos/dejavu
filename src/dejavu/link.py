@@ -190,6 +190,7 @@ class Plan:
     hubs: list[str] = field(default_factory=list)
     needs_embedding: int = 0
     handwritten: int = 0
+    truncated: int = 0  # notes left for the next run by --limit
 
     @property
     def link_count(self) -> int:
@@ -205,6 +206,7 @@ class Plan:
             "renames": self.renames,
             "hubs": self.hubs,
             "needs_embedding": self.needs_embedding,
+            "truncated": self.truncated,
             "files": [f["path"] for f in self.files],
         }
 
@@ -322,7 +324,7 @@ def _drop_hubs(mutual: dict[str, set[str]]) -> tuple[dict[str, set[str]], set[st
     return trimmed, hubs
 
 
-def plan(cfg, folder: str | None, *, progress=None) -> Plan:
+def plan(cfg, folder: str | None, *, limit: int | None = None, progress=None) -> Plan:
     """Work out what would change. Writes nothing to the vault."""
     from .store import connect
 
@@ -375,7 +377,6 @@ def plan(cfg, folder: str | None, *, progress=None) -> Plan:
     ambiguous = _ambiguous_stems(vault, paths)
 
     files = []
-    handwritten = 0
     for uid, neighbours in sorted(mutual.items(), key=lambda kv: by_uid[kv[0]].name):
         if not neighbours:
             continue
@@ -390,15 +391,26 @@ def plan(cfg, folder: str | None, *, progress=None) -> Plan:
         ]
         links = relate.format_links(candidates, ambiguous=ambiguous)
         text = path.read_text(encoding="utf-8")
-        if not obsidian.is_dejavu_note(text):
-            handwritten += 1
+        # Only notes whose block would actually differ. Without this the count is the
+        # number of notes that *have* a block, so a nightly run never settles at zero.
+        if upsert_block(text, links) == text:
+            continue
         files.append(
             {
                 "path": path.relative_to(vault).as_posix(),
                 "before": file_hash(path),
                 "links": links,
+                "handwritten": not obsidian.is_dejavu_note(text),
             }
         )
+
+    # Cutting the tail is safe only because of the check above: what is left out here
+    # still differs next time, so it comes back in the next plan.
+    truncated = 0
+    if limit is not None and len(files) > limit:
+        truncated = len(files) - limit
+        files = files[:limit]
+    handwritten = sum(1 for f in files if f["handwritten"])
 
     made = Plan(
         plan_id="",
@@ -408,6 +420,7 @@ def plan(cfg, folder: str | None, *, progress=None) -> Plan:
         hubs=sorted(by_uid[uid].relative_to(vault).as_posix() for uid in hubs),
         needs_embedding=needed,
         handwritten=handwritten,
+        truncated=truncated,
     )
     return _save_plan(made)
 
@@ -432,6 +445,7 @@ def _save_plan(made: Plan) -> Plan:
                         "renames": made.renames,
                         "hubs": made.hubs,
                         "handwritten": made.handwritten,
+                        "truncated": made.truncated,
                     },
                     ensure_ascii=False,
                 ),
@@ -468,6 +482,7 @@ def load_plan(plan_id: str) -> Plan:
         renames=data["renames"],
         hubs=data["hubs"],
         handwritten=data["handwritten"],
+        truncated=data.get("truncated", 0),
     )
 
 
