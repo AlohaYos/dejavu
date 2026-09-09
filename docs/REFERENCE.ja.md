@@ -168,7 +168,7 @@ promote       = "ask"        # ask | always | never
 harvest       = "on"         # on | off
 harvest_min_lines = 40
 relate        = "off"        # off | search | embed
-relate_model  = "bge-m3"
+relate_model  = "embeddinggemma:300m"
 relate_host   = "http://localhost:11434"
 relate_key    = "related"
 relate_top_k  = 5
@@ -350,7 +350,7 @@ dejavu が Obsidian にノートを書いたその瞬間に、内容の近い既
 
 ```bash
 dejavu config relate embed
-ollama pull bge-m3
+ollama pull embeddinggemma:300m
 dejavu obsidian relate --backfill      # 既存ノートを一度だけベクトル化する
 ```
 
@@ -443,7 +443,7 @@ Ollama に HTTP で問い合わせます（`urllib` だけを使うので、依�
 | `relate_key` | `related` | frontmatter のキー名 |
 | `relate_top_k` | `5` | 1ノートあたりのリンク数の上限 |
 | `relate_min_chars` | `40` | これより短いノートはリンクしない |
-| `relate_model` | `bge-m3` | Ollama のモデル名 |
+| `relate_model` | `embeddinggemma:300m` | Ollama のモデル名 |
 | `relate_host` | `http://localhost:11434` | Ollama の場所 |
 | `relate_min_sim` | `0.65` | これ未満の類似度は無関係とみなす（`embed` のみ） |
 | `relate_autostart` | `ask` | `ask` / `always` / `never` |

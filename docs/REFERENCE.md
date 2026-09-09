@@ -169,7 +169,7 @@ promote       = "ask"        # ask | always | never
 harvest       = "on"         # on | off
 harvest_min_lines = 40
 relate        = "off"        # off | search | embed
-relate_model  = "bge-m3"
+relate_model  = "embeddinggemma:300m"
 relate_host   = "http://localhost:11434"
 relate_key    = "related"
 relate_top_k  = 5
@@ -357,7 +357,7 @@ file watcher. **This is not a nightly batch job.**
 
 ```bash
 dejavu config relate embed
-ollama pull bge-m3
+ollama pull embeddinggemma:300m
 dejavu obsidian relate --backfill      # embed the notes you already have, once
 ```
 
@@ -456,7 +456,7 @@ known and accepted.
 | `relate_key` | `related` | the frontmatter key to write |
 | `relate_top_k` | `5` | most links to add to one note |
 | `relate_min_chars` | `40` | notes shorter than this are not linked |
-| `relate_model` | `bge-m3` | the Ollama model |
+| `relate_model` | `embeddinggemma:300m` | the Ollama model |
 | `relate_host` | `http://localhost:11434` | where Ollama is |
 | `relate_min_sim` | `0.65` | below this, two notes are unrelated (`embed` only) |
 | `relate_autostart` | `ask` | `ask` / `always` / `never` |

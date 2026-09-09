@@ -465,7 +465,7 @@ It needs a model running on your own machine ([Ollama](https://ollama.com)).
 2. Run these three lines in Terminal
 
 ```bash
-ollama pull bge-m3
+ollama pull embeddinggemma:300m
 dejavu config relate embed
 dejavu obsidian relate --backfill
 ```

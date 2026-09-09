@@ -406,7 +406,7 @@ dejavu が Obsidian にメモを書いたとき、**内容の近い過去のメ�
 2. ターミナルで次の3行を実行します
 
 ```bash
-ollama pull bge-m3
+ollama pull embeddinggemma:300m
 dejavu config relate embed
 dejavu obsidian relate --backfill
 ```

@@ -74,7 +74,8 @@ SEARCH_POOL = 20
 # vectors built by the previous version's rules. Same reasoning as `INDEX_VERSION`.
 EMBED_VERSION = 1
 
-# Long enough to hold a real note, short enough to stay well inside bge-m3's window.
+# Long enough to hold a real note, short enough to stay well inside the 8192-token
+# window that both embeddinggemma and bge-m3 provide.
 MAX_EMBED_CHARS = 6000
 
 # The write path gets three seconds. Past that, waiting costs the user more than the link

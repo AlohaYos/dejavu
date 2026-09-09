@@ -298,7 +298,7 @@ OBSIDIAN_DEFAULTS: dict[str, str] = {
     "harvest": "on",
     "relate": "off",
     "relate_key": "related",
-    "relate_model": "bge-m3",
+    "relate_model": "embeddinggemma:300m",
     "relate_host": "http://localhost:11434",
     "relate_autostart": "ask",
     # Sent with every request rather than exported as OLLAMA_KEEP_ALIVE: an environment
