@@ -450,7 +450,12 @@ def wait_until_ready(cfg, *, progress=None, port_timeout: float = 15.0) -> None:
     deadline = time.monotonic() + port_timeout
     while True:
         try:
-            _post(cfg.relate_host.rstrip("/") + "/api/tags", {}, 2.0)
+            _http_get(cfg.relate_host.rstrip("/") + "/api/tags", 2.0)
+            break
+        except urllib.error.HTTPError:
+            # Any status at all means the port is open. HTTPError is an OSError, so this
+            # has to come first — Ollama 0.34 answers 405 to a POST here, and treating that
+            # as "not listening yet" meant the warm-up never ran.
             break
         except OSError:
             pass
@@ -496,7 +501,21 @@ def start(cfg, *, progress=None) -> Install:
 
 
 class OllamaUnavailable(RuntimeError):
-    """Ollama could not be reached, or could not answer. Never fatal."""
+    """Ollama could not be reached, or could not answer. Never fatal.
+
+    `slow` separates "the port answered but the model was not loaded in time" from
+    "nothing is listening". Both defer the note the same way; only the diagnosis differs,
+    and a wrong diagnosis sends the user off restarting a server that is running fine.
+    """
+
+    def __init__(self, message: str, *, slow: bool = False) -> None:
+        super().__init__(message)
+        self.slow = slow
+
+
+# What a slow model is recorded as. `known_down` hands the stored text back, so this
+# string is also how a remembered outage is recognised as a slow one.
+SLOW_REASON = "Ollama is running, but the model did not load in time"
 
 
 def embed_text_for(title: str, body: str) -> str:
@@ -528,6 +547,12 @@ def _post(url: str, payload: dict, timeout: float) -> dict:
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
         return json.loads(response.read().decode("utf-8"))
+
+
+def _http_get(url: str, timeout: float) -> None:
+    """A plain GET whose body is ignored. Only used to ask whether the port answers."""
+    with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310
+        response.read()
 
 
 def _normalize(values: list[float]) -> array:
@@ -574,6 +599,10 @@ def embed(
             raise OllamaUnavailable(str(legacy)) from legacy
     except urllib.error.URLError as exc:
         raise OllamaUnavailable(f"cannot reach Ollama at {host} ({exc.reason})") from exc
+    except TimeoutError as exc:
+        # Connected, then no reply in time: Ollama holds the response until the model is
+        # loaded. A connect timeout never gets here — urllib wraps that in URLError.
+        raise OllamaUnavailable(SLOW_REASON, slow=True) from exc
     except (OSError, ValueError) as exc:
         raise OllamaUnavailable(str(exc)) from exc
 
@@ -587,6 +616,11 @@ def reachable(cfg) -> tuple[bool, str]:
     try:
         embed(["ping"], model=cfg.relate_model, host=cfg.relate_host, timeout=WRITE_TIMEOUT)
     except OllamaUnavailable as exc:
+        if exc.slow:
+            return False, (
+                f"running at {cfg.relate_host}, but {cfg.relate_model} "
+                f"did not load within {WRITE_TIMEOUT:g}s"
+            )
         return False, str(exc)
     return True, f"reachable at {cfg.relate_host}"
 
@@ -618,7 +652,7 @@ def _embed_one(
     if _LAST is not None and _LAST[0] == digest:
         return _LAST[1]
     if trust_state and (reason := known_down(cfg)):
-        raise OllamaUnavailable(reason)
+        raise OllamaUnavailable(reason, slow=reason == SLOW_REASON)
     try:
         vec = embed(
             [text],
@@ -691,8 +725,8 @@ def remember(cfg, path: Path, *, vault: Path) -> str:
             return "stored"
         try:
             vec = _embed_one(cfg, material)
-        except OllamaUnavailable:
-            _queue(con, uid, rel_path, "ollama-down")
+        except OllamaUnavailable as exc:
+            _queue(con, uid, rel_path, "ollama-slow" if exc.slow else "ollama-down")
             con.commit()
             return "deferred"
         _store_vector(con, uid, cfg.relate_model, digest, vec)

@@ -8,9 +8,13 @@ thing the test hopes for.
 from __future__ import annotations
 
 import json
+import socket
+import threading
+import time
 import urllib.error
 from array import array
 from dataclasses import replace
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import pytest
@@ -191,6 +195,122 @@ def test_the_request_body_is_what_ollama_expects(monkeypatch: pytest.MonkeyPatch
     assert sent["payload"] == {"model": "bge-m3", "input": ["hello"]}
 
 
+def test_a_reply_that_never_comes_is_a_slow_model_not_a_dead_one(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def hang(url, payload, timeout):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(relate, "_post", hang)
+    with pytest.raises(relate.OllamaUnavailable) as caught:
+        relate.embed(["x"], model="m", host="h", timeout=1)
+    assert caught.value.slow
+
+
+def test_a_refused_connection_is_not_called_slow(monkeypatch: pytest.MonkeyPatch):
+    def refuse(url, payload, timeout):
+        raise urllib.error.URLError(ConnectionRefusedError(61, "Connection refused"))
+
+    monkeypatch.setattr(relate, "_post", refuse)
+    with pytest.raises(relate.OllamaUnavailable) as caught:
+        relate.embed(["x"], model="m", host="h", timeout=1)
+    assert not caught.value.slow
+
+
+def test_doctor_says_running_when_only_the_model_is_slow(
+    vault: Path, monkeypatch: pytest.MonkeyPatch
+):
+    def slow(*args, **kwargs):
+        raise relate.OllamaUnavailable(relate.SLOW_REASON, slow=True)
+
+    monkeypatch.setattr(relate, "embed", slow)
+    ok, why = relate.reachable(configure(vault))
+    assert not ok
+    assert why.startswith("running at")
+
+
+# ---------------------------------------------------------------- waiting for the port
+
+
+@pytest.fixture
+def tags_server():
+    """A local server whose answer to /api/tags the test chooses, per method."""
+    replies: dict[str, int] = {}
+
+    class Handler(BaseHTTPRequestHandler):
+        def _answer(self):
+            self.send_response(replies.get(self.command, 405))
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        do_GET = do_POST = _answer
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{server.server_port}", replies
+    server.shutdown()
+    server.server_close()
+
+
+def _wait(host: str, monkeypatch: pytest.MonkeyPatch, *, port_timeout: float = 5.0):
+    warmed: list = []
+    monkeypatch.setattr(relate, "embed", lambda texts, **kw: warmed.append(texts))
+    cfg = replace(scope_mod.obsidian_config(), relate_host=host)
+    started = time.monotonic()
+    relate.wait_until_ready(cfg, port_timeout=port_timeout)
+    return warmed, time.monotonic() - started
+
+
+@pytest.mark.parametrize(
+    "replies",
+    [
+        {"POST": 405},  # Ollama 0.34: POST refused. GET is what we send, but either way
+        {"GET": 200},  # the port answered, so the warm-up must run
+        {"GET": 500},
+    ],
+)
+def test_any_http_answer_means_the_port_is_open(
+    tags_server, replies, monkeypatch: pytest.MonkeyPatch
+):
+    host, table = tags_server
+    table.update(replies)
+
+    warmed, elapsed = _wait(host, monkeypatch)
+
+    assert warmed == [["warm"]]
+    assert elapsed < 1.0
+
+
+def test_the_port_check_is_a_get(tags_server, monkeypatch: pytest.MonkeyPatch):
+    host, table = tags_server
+    table.update({"GET": 200, "POST": 405})
+    seen: list[str] = []
+    real = relate.urllib.request.urlopen
+
+    def spy(request, timeout):
+        seen.append(request if isinstance(request, str) else request.get_method())
+        return real(request, timeout=timeout)
+
+    monkeypatch.setattr(relate.urllib.request, "urlopen", spy)
+    _wait(host, monkeypatch)
+
+    assert seen == [host + "/api/tags"]  # a bare URL is a GET
+
+
+def test_a_closed_port_still_gives_up(monkeypatch: pytest.MonkeyPatch):
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]  # closed again once the block ends
+
+    with pytest.raises(relate.OllamaUnavailable, match="did not start in time"):
+        _wait(f"http://127.0.0.1:{port}", monkeypatch, port_timeout=0.6)
+
+
 # ---------------------------------------------------------------- choosing by meaning
 
 
@@ -334,3 +454,25 @@ def test_remember_is_quiet_when_ollama_is_down(vault: Path, monkeypatch: pytest.
     assert relate.remember(cfg, path, vault=vault) == "deferred"
     assert relate.vector_counts(cfg)[0] == 0
     assert [row["rel_path"] for row in relate.pending(cfg)] == ["Knowledge/a.md"]
+    assert relate.pending(cfg)[0]["reason"] == "ollama-down"
+
+
+def test_a_slow_model_is_queued_as_slow(vault: Path, monkeypatch: pytest.MonkeyPatch):
+    path = write_note(vault, "Knowledge/a.md", NOTE.format(title="A", body="本文である。" * 12))
+    cfg = configure(vault)
+    obsidian.sync_vault(cfg, force=True)
+
+    def slow(*args, **kwargs):
+        raise relate.OllamaUnavailable(relate.SLOW_REASON, slow=True)
+
+    monkeypatch.setattr(relate, "embed", slow)
+    relate._LAST = None
+
+    assert relate.remember(cfg, path, vault=vault) == "deferred"
+    assert relate.pending(cfg)[0]["reason"] == "ollama-slow"
+
+    # The next write trusts the remembered outage without calling Ollama — and still
+    # knows it was a slow model rather than a dead one.
+    with pytest.raises(relate.OllamaUnavailable) as caught:
+        relate._embed_one(cfg, "別の本文")
+    assert caught.value.slow
